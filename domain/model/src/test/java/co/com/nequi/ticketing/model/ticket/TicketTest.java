@@ -45,6 +45,14 @@ class TicketTest {
     }
 
     @Test
+    void shouldRejectSaleFromAnotherOrder() {
+        Ticket pending = available.reserve("O1", EXPIRES_AT).startConfirmation("O1");
+
+        assertThrows(TicketNotOwnedException.class, () -> pending.confirm("O2"));
+    }
+
+
+    @Test
     void shouldReleaseReservedTicket() {
         Ticket released = available.reserve("O1", EXPIRES_AT).release();
 
