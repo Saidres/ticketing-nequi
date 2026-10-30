@@ -1,0 +1,11 @@
+dependencies {
+    implementation 'software.amazon.awssdk:dynamodb'
+
+    testImplementation 'org.testcontainers:testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+}
+
+// Mutation testing would restart the DynamoDB container for every mutant; it runs on unit tests only
+pitest {
+    excludedTestClasses = ['*IntegrationTest']
+}

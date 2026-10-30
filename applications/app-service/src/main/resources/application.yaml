@@ -1,14 +1,27 @@
-##Spring Configuration
 server:
   port: 8080
 spring:
   application:
-    name: ticketing
-  devtools:
-    add-properties: false
-  h2:
-    console:
-      enabled: true
-      path: /h2
+    name: "ticketing"
   profiles:
-    include:
+    default: "local"
+aws:
+  region: "${AWS_REGION:us-east-1}"
+  dynamodb:
+    tables:
+      events: "${TABLE_EVENTS:ticketing-events}"
+      tickets: "${TABLE_TICKETS:ticketing-tickets}"
+      orders: "${TABLE_ORDERS:ticketing-orders}"
+  sqs:
+    orders-queue-url: "${ORDERS_QUEUE_URL}"
+adapter:
+  sqs:
+    region: "${aws.region}"
+    queueUrl: "${aws.sqs.orders-queue-url}"
+entrypoint:
+  sqs:
+    queueUrl: "${aws.sqs.orders-queue-url}"
+    waitTimeSeconds: 20
+    maxNumberOfMessages: 10
+    visibilityTimeoutSeconds: 30
+    concurrentPollers: 2

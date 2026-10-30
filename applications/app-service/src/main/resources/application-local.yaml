@@ -1,0 +1,8 @@
+aws:
+  dynamodb:
+    endpoint: "${DYNAMODB_ENDPOINT:http://localhost:8000}"
+  sqs:
+    orders-queue-url: "${ORDERS_QUEUE_URL:http://localhost:4566/000000000000/ticketing-orders}"
+adapter:
+  sqs:
+    endpoint: "${SQS_ENDPOINT:http://localhost:4566}"
