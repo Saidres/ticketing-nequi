@@ -1,6 +1,6 @@
 package co.com.nequi.ticketing.model.exception;
 
-// Raised by adapters when a conditional write loses a race; unlike business errors, it is safe to retry
+// Thrown by adapters when a conditional write loses a race; safe to retry
 public final class ConcurrencyConflictException extends RuntimeException {
 
     public ConcurrencyConflictException(String entity, String id) {

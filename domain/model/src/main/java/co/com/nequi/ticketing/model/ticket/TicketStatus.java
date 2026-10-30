@@ -12,7 +12,6 @@ public enum TicketStatus {
         };
     }
 
-    // States that link the ticket to a customer's order
     public boolean isHeldByOrder() {
         return switch (this) {
             case RESERVED, PENDING_CONFIRMATION, SOLD -> true;

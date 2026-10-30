@@ -19,12 +19,10 @@ public record Ticket(String id, String eventId, TicketStatus status, String orde
         }
     }
 
-    // Req. 1: every event has an inventory of available tickets
     public static Ticket available(String id, String eventId) {
         return new Ticket(id, eventId, TicketStatus.AVAILABLE, null, 0L);
     }
 
-    // Req. 2: holds the ticket for an order; the time limit lives on the order
     public Ticket reserve(String orderId) {
         return transitionTo(TicketStatus.RESERVED, requireNonBlank(orderId, "orderId"));
     }
@@ -39,7 +37,6 @@ public record Ticket(String id, String eventId, TicketStatus status, String orde
         return transitionTo(TicketStatus.SOLD, orderId);
     }
 
-    // Req. 2 & 6: an unconfirmed reservation returns to the available inventory
     public Ticket release(String orderId) {
         requireHeldBy(orderId);
         return transitionTo(TicketStatus.AVAILABLE, null);
@@ -56,7 +53,6 @@ public record Ticket(String id, String eventId, TicketStatus status, String orde
         return new Ticket(id, eventId, target, newOrderId, version + 1);
     }
 
-    // Security: prevents another order from changing a ticket it does not hold
     private void requireHeldBy(String orderId) {
         if (!Objects.equals(this.orderId, orderId)) {
             throw new TicketNotOwnedException(id, orderId);

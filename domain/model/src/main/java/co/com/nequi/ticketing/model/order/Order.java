@@ -12,10 +12,8 @@ import static co.com.nequi.ticketing.model.shared.Preconditions.requireNonBlank;
 public record Order(String id, String eventId, String customerId, int quantity, OrderStatus status,
                     Instant createdAt, Instant reservedUntil, long version) {
 
-    // Security: caps tickets per order to prevent resource abuse
     public static final int MAX_TICKETS_PER_ORDER = 6;
 
-    // Req. 2: the configured reservation time can never exceed 10 minutes
     public static final Duration MAX_RESERVATION_TTL = Duration.ofMinutes(10);
 
     public Order {
@@ -35,12 +33,10 @@ public record Order(String id, String eventId, String customerId, int quantity, 
         }
     }
 
-    // Req. 3: every purchase request starts queued as PENDING
     public static Order pending(String id, String eventId, String customerId, int quantity, Instant createdAt) {
         return new Order(id, eventId, customerId, quantity, OrderStatus.PENDING, createdAt, null, 0L);
     }
 
-    // Req. 2 & 3: the consumer secured the tickets; the reservation clock starts now
     public Order reserve(Instant now, Duration ttl) {
         if (ttl.isNegative() || ttl.isZero() || ttl.compareTo(MAX_RESERVATION_TTL) > 0) {
             throw new IllegalArgumentException("ttl must be between 1 second and " + MAX_RESERVATION_TTL);
@@ -48,14 +44,11 @@ public record Order(String id, String eventId, String customerId, int quantity, 
         return transitionTo(OrderStatus.RESERVED, now.plus(ttl));
     }
 
-    // Req. 3 & 5: not enough tickets available
     public Order reject() {
         return transitionTo(OrderStatus.REJECTED, null);
     }
 
-    // Payment is out of scope, so a confirmed order always ends with SOLD tickets.
-    // The order must be confirmed (conditional write) BEFORE its tickets move to PENDING_CONFIRMATION:
-    // the version check then decides the race against the expiration sweeper, which only expires RESERVED orders
+    // Persist before moving tickets: the version check decides the race against expiration
     public Order confirm(Instant now) {
         if (isReservationExpired(now)) {
             throw new ReservationExpiredException(id);
@@ -63,7 +56,6 @@ public record Order(String id, String eventId, String customerId, int quantity, 
         return transitionTo(OrderStatus.CONFIRMED, null);
     }
 
-    // Req. 6: reservation time limit exceeded
     public Order expire() {
         return transitionTo(OrderStatus.EXPIRED, null);
     }

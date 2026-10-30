@@ -7,7 +7,6 @@ import static co.com.nequi.ticketing.model.shared.Preconditions.requireNonBlank;
 
 public record Event(String id, String name, Instant date, String venue, int totalCapacity) {
 
-    // Security: one ticket is created per seat, so capacity is capped to prevent resource abuse
     public static final int MAX_CAPACITY = 100_000;
 
     public Event {
