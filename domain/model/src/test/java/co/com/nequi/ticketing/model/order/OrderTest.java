@@ -5,8 +5,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -16,44 +14,28 @@ class OrderTest {
     private final Order pending = Order.pending("O1", "E1", "C1", 2, NOW);
 
     @Test
-    void shouldStartAsPendingWithoutTickets() {
+    void shouldStartAsPending() {
         assertEquals(OrderStatus.PENDING, pending.status());
-        assertTrue(pending.ticketIds().isEmpty());
     }
 
     @Test
-    void shouldReserveWithRequestedTickets() {
-        Order reserved = pending.reserve(List.of("T1", "T2"));
-
-        assertEquals(OrderStatus.RESERVED, reserved.status());
-        assertEquals(List.of("T1", "T2"), reserved.ticketIds());
+    void shouldReservePendingOrder() {
+        assertEquals(OrderStatus.RESERVED, pending.reserve().status());
     }
 
     @Test
-    void shouldRejectReservationWithWrongTicketCount() {
-        assertThrows(IllegalArgumentException.class, () -> pending.reserve(List.of("T1")));
-    }
-
-    @Test
-    void shouldRejectOrderWithoutTickets() {
-        Order rejected = pending.reject();
-
-        assertEquals(OrderStatus.REJECTED, rejected.status());
-        assertTrue(rejected.ticketIds().isEmpty());
+    void shouldRejectPendingOrder() {
+        assertEquals(OrderStatus.REJECTED, pending.reject().status());
     }
 
     @Test
     void shouldConfirmReservedOrder() {
-        Order confirmed = pending.reserve(List.of("T1", "T2")).confirm();
-
-        assertEquals(OrderStatus.CONFIRMED, confirmed.status());
+        assertEquals(OrderStatus.CONFIRMED, pending.reserve().confirm().status());
     }
 
     @Test
     void shouldExpireReservedOrder() {
-        Order expired = pending.reserve(List.of("T1", "T2")).expire();
-
-        assertEquals(OrderStatus.EXPIRED, expired.status());
+        assertEquals(OrderStatus.EXPIRED, pending.reserve().expire().status());
     }
 
     @Test
@@ -61,21 +43,17 @@ class OrderTest {
         assertThrows(InvalidOrderTransitionException.class, pending::confirm);
     }
 
-    @Test
-    void shouldNotBeModifiableFromOutside() {
-        List<String> mutable = new ArrayList<>(List.of("T1", "T2"));
-        Order reserved = pending.reserve(mutable);
-
-        mutable.add("T3");
-
-        assertEquals(2, reserved.ticketIds().size());
-    }
-
     @ParameterizedTest
     @ValueSource(ints = {0, 7})
     void shouldRejectQuantityOutOfRange(int quantity) {
         assertThrows(IllegalArgumentException.class,
                 () -> Order.pending("O1", "E1", "C1", quantity, NOW));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 6})
+    void shouldAcceptQuantityAtLimits(int quantity) {
+        assertEquals(quantity, Order.pending("O1", "E1", "C1", quantity, NOW).quantity());
     }
 
     @Test
