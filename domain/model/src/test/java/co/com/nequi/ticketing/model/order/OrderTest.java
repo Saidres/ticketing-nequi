@@ -1,13 +1,17 @@
 package co.com.nequi.ticketing.model.order;
 
+import co.com.nequi.ticketing.model.exception.ConcurrencyConflictException;
 import co.com.nequi.ticketing.model.exception.InvalidStateTransitionException;
 import co.com.nequi.ticketing.model.exception.ReservationExpiredException;
+import co.com.nequi.ticketing.model.ticket.Ticket;
+import co.com.nequi.ticketing.model.ticket.TicketStatus;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -53,23 +57,39 @@ class OrderTest {
     }
 
     @Test
-    void shouldConfirmReservationAtTheTimeLimit() {
-        Order confirmed = pending.reserve(NOW, TTL).confirm(EXPIRES_AT);
+    void shouldStartConfirmationAtTheTimeLimit() {
+        Order confirming = pending.reserve(NOW, TTL).startConfirmation(EXPIRES_AT);
+
+        assertEquals(OrderStatus.CONFIRMING, confirming.status());
+        assertNull(confirming.reservedUntil());
+        assertFalse(confirming.isReservationExpired(EXPIRES_AT.plusSeconds(1)));
+    }
+
+    @Test
+    void shouldConfirmOrderInConfirmation() {
+        Order confirmed = pending.reserve(NOW, TTL).startConfirmation(NOW).confirm();
 
         assertEquals(OrderStatus.CONFIRMED, confirmed.status());
-        assertNull(confirmed.reservedUntil());
+        assertEquals(3, confirmed.version());
+    }
+
+    @Test
+    void shouldNotConfirmReservedOrderWithoutStartingConfirmation() {
+        Order reserved = pending.reserve(NOW, TTL);
+
+        assertThrows(InvalidStateTransitionException.class, reserved::confirm);
     }
 
     @Test
     void shouldNotConfirmExpiredReservation() {
         Order reserved = pending.reserve(NOW, TTL);
 
-        assertThrows(ReservationExpiredException.class, () -> reserved.confirm(EXPIRES_AT.plusSeconds(1)));
+        assertThrows(ReservationExpiredException.class, () -> reserved.startConfirmation(EXPIRES_AT.plusSeconds(1)));
     }
 
     @Test
     void shouldNotConfirmPendingOrder() {
-        assertThrows(InvalidStateTransitionException.class, () -> pending.confirm(NOW));
+        assertThrows(InvalidStateTransitionException.class, () -> pending.startConfirmation(NOW));
     }
 
     @Test
@@ -98,6 +118,32 @@ class OrderTest {
 
         assertFalse(reserved.isReservationExpired(EXPIRES_AT));
         assertTrue(reserved.isReservationExpired(EXPIRES_AT.plusSeconds(1)));
+    }
+
+    @Test
+    void shouldAcceptItsOwnTicketsInTheExpectedStatus() {
+        List<Ticket> held = List.of(Ticket.available("T1", "E1").reserve("O1"), Ticket.available("T2", "E1").reserve("O1"));
+
+        assertEquals(held, pending.requireOwnTickets(held, TicketStatus.RESERVED));
+    }
+
+    @Test
+    void shouldReportStaleTicketReadsAsAConflict() {
+        Ticket mine = Ticket.available("T1", "E1").reserve("O1");
+        Ticket other = Ticket.available("T2", "E1").reserve("O9");
+
+        assertThrows(ConcurrencyConflictException.class, () -> pending.requireOwnTickets(List.of(mine), TicketStatus.RESERVED));
+        assertThrows(ConcurrencyConflictException.class,
+                () -> pending.requireOwnTickets(List.of(mine, other), TicketStatus.RESERVED));
+        assertThrows(ConcurrencyConflictException.class,
+                () -> pending.requireOwnTickets(List.of(mine, mine), TicketStatus.SOLD));
+    }
+
+    @Test
+    void shouldKnowItsOwner() {
+        assertTrue(pending.isOwnedBy("C1"));
+        assertFalse(pending.isOwnedBy("C2"));
+        assertFalse(pending.isOwnedBy(null));
     }
 
     @Test

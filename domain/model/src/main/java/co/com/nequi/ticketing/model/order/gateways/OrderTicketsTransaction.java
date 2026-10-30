@@ -8,7 +8,7 @@ import java.util.List;
 
 public interface OrderTicketsTransaction {
 
-    // Writes an order and its tickets together (reserve, confirm, expire) all-or-nothing; every item is
-    // conditional on its stored version being version - 1, else ConcurrencyConflictException
+    // Writes an order and its tickets together, all-or-nothing; every item is conditional
+    // on its stored version being version - 1, else ConcurrencyConflictException
     Mono<Void> commit(Order order, List<Ticket> tickets);
 }

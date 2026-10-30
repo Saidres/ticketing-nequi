@@ -1,10 +1,14 @@
 package co.com.nequi.ticketing.model.order;
 
+import co.com.nequi.ticketing.model.exception.ConcurrencyConflictException;
 import co.com.nequi.ticketing.model.exception.InvalidStateTransitionException;
 import co.com.nequi.ticketing.model.exception.ReservationExpiredException;
+import co.com.nequi.ticketing.model.ticket.Ticket;
+import co.com.nequi.ticketing.model.ticket.TicketStatus;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 
 import static co.com.nequi.ticketing.model.shared.Preconditions.requireNonBlank;
@@ -52,16 +56,34 @@ public record Order(String id, String eventId, String customerId, int quantity, 
         return transitionTo(OrderStatus.REJECTED, null);
     }
 
-    // Persist before moving tickets: the version check decides the race against expiration
-    public Order confirm(Instant now) {
+    // Leaving RESERVED ends the reservation clock: the expiration sweeper only expires RESERVED orders
+    public Order startConfirmation(Instant now) {
         if (isReservationExpired(now)) {
             throw new ReservationExpiredException(id);
         }
+        return transitionTo(OrderStatus.CONFIRMING, null);
+    }
+
+    public Order confirm() {
         return transitionTo(OrderStatus.CONFIRMED, null);
     }
 
     public Order expire() {
         return transitionTo(OrderStatus.EXPIRED, null);
+    }
+
+    // Guards against stale reads: the order must see exactly its own tickets in the expected status
+    public List<Ticket> requireOwnTickets(List<Ticket> tickets, TicketStatus expected) {
+        boolean consistent = tickets.size() == quantity && tickets.stream()
+                .allMatch(ticket -> ticket.status() == expected && id.equals(ticket.orderId()));
+        if (!consistent) {
+            throw new ConcurrencyConflictException("Order", id);
+        }
+        return tickets;
+    }
+
+    public boolean isOwnedBy(String customerId) {
+        return this.customerId.equals(customerId);
     }
 
     public boolean isReservationExpired(Instant now) {
