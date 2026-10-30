@@ -7,8 +7,16 @@ public enum TicketStatus {
         return switch (this) {
             case AVAILABLE -> next == RESERVED || next == COMPLIMENTARY;
             case RESERVED -> next == AVAILABLE || next == PENDING_CONFIRMATION;
-            case PENDING_CONFIRMATION -> next == AVAILABLE || next == SOLD;
+            case PENDING_CONFIRMATION -> next == SOLD;
             case SOLD, COMPLIMENTARY -> false;
+        };
+    }
+
+    // States that link the ticket to a customer's order
+    public boolean isHeldByOrder() {
+        return switch (this) {
+            case RESERVED, PENDING_CONFIRMATION, SOLD -> true;
+            case AVAILABLE, COMPLIMENTARY -> false;
         };
     }
 }

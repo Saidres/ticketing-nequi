@@ -2,9 +2,11 @@ package co.com.nequi.ticketing.model.ticket;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-public class TicketStatusTest {
+class TicketStatusTest {
+
     @ParameterizedTest
     @CsvSource({
             "AVAILABLE, AVAILABLE, false",
@@ -19,7 +21,7 @@ public class TicketStatusTest {
             "RESERVED, SOLD, false",
             "RESERVED, COMPLIMENTARY, false",
 
-            "PENDING_CONFIRMATION, AVAILABLE, true",
+            "PENDING_CONFIRMATION, AVAILABLE, false",
             "PENDING_CONFIRMATION, RESERVED, false",
             "PENDING_CONFIRMATION, PENDING_CONFIRMATION, false",
             "PENDING_CONFIRMATION, SOLD, true",
@@ -41,6 +43,15 @@ public class TicketStatusTest {
         assertEquals(expected, from.canTransitionTo(to));
     }
 
-
-
+    @ParameterizedTest
+    @CsvSource({
+            "AVAILABLE, false",
+            "RESERVED, true",
+            "PENDING_CONFIRMATION, true",
+            "SOLD, true",
+            "COMPLIMENTARY, false",
+    })
+    void shouldKnowWhichStatesAreHeldByAnOrder(TicketStatus status, boolean expected) {
+        assertEquals(expected, status.isHeldByOrder());
+    }
 }

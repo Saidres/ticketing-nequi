@@ -1,90 +1,138 @@
 package co.com.nequi.ticketing.model.ticket;
 
+import co.com.nequi.ticketing.model.exception.InvalidStateTransitionException;
+import co.com.nequi.ticketing.model.exception.TicketNotOwnedException;
 import org.junit.jupiter.api.Test;
 
-import java.time.Instant;
-
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class TicketTest {
 
-    private static final Instant EXPIRES_AT = Instant.parse("2026-11-01T10:10:00Z");
     private final Ticket available = Ticket.available("T1", "E1");
 
     @Test
     void shouldReserveAvailableTicket() {
-        Ticket reserved = available.reserve("O1", EXPIRES_AT);
+        Ticket reserved = available.reserve("O1");
 
         assertEquals(TicketStatus.RESERVED, reserved.status());
         assertEquals("O1", reserved.orderId());
-        assertEquals(EXPIRES_AT, reserved.reservedUntil());
         assertEquals(1, reserved.version());
     }
 
     @Test
-    void shouldNotReserveAlreadyReservedTicket() {
-        Ticket reserved = available.reserve("O1", EXPIRES_AT);
+    void shouldKeepIdentityAcrossTransitions() {
+        Ticket reserved = available.reserve("O1");
 
-        assertThrows(InvalidTicketTransitionException.class, () -> reserved.reserve("O2", EXPIRES_AT));
+        assertEquals("T1", reserved.id());
+        assertEquals("E1", reserved.eventId());
+    }
+
+    @Test
+    void shouldNotReserveAlreadyReservedTicket() {
+        Ticket reserved = available.reserve("O1");
+
+        assertThrows(InvalidStateTransitionException.class, () -> reserved.reserve("O2"));
     }
 
     @Test
     void shouldCompleteSaleFlow() {
-        Ticket sold = available.reserve("O1", EXPIRES_AT).startConfirmation("O1").confirm("O1");
+        Ticket sold = available.reserve("O1").startConfirmation("O1").sell("O1");
 
         assertEquals(TicketStatus.SOLD, sold.status());
-        assertNull(sold.reservedUntil());
+        assertEquals("O1", sold.orderId());
         assertEquals(3, sold.version());
     }
 
     @Test
+    void shouldNotSellTicketThatIsOnlyReserved() {
+        Ticket reserved = available.reserve("O1");
+
+        assertThrows(InvalidStateTransitionException.class, () -> reserved.sell("O1"));
+    }
+
+    @Test
     void shouldRejectConfirmationFromAnotherOrder() {
-        Ticket reserved = available.reserve("O1", EXPIRES_AT);
+        Ticket reserved = available.reserve("O1");
 
         assertThrows(TicketNotOwnedException.class, () -> reserved.startConfirmation("O2"));
     }
 
     @Test
     void shouldRejectSaleFromAnotherOrder() {
-        Ticket pending = available.reserve("O1", EXPIRES_AT).startConfirmation("O1");
+        Ticket pending = available.reserve("O1").startConfirmation("O1");
 
-        assertThrows(TicketNotOwnedException.class, () -> pending.confirm("O2"));
+        assertThrows(TicketNotOwnedException.class, () -> pending.sell("O2"));
     }
-
 
     @Test
     void shouldReleaseReservedTicket() {
-        Ticket released = available.reserve("O1", EXPIRES_AT).release();
+        Ticket released = available.reserve("O1").release("O1");
 
         assertEquals(TicketStatus.AVAILABLE, released.status());
         assertNull(released.orderId());
-        assertNull(released.reservedUntil());
+    }
+
+    @Test
+    void shouldNotReleaseTicketPendingConfirmation() {
+        Ticket pending = available.reserve("O1").startConfirmation("O1");
+
+        assertThrows(InvalidStateTransitionException.class, () -> pending.release("O1"));
+    }
+
+    @Test
+    void shouldRequireOrderToReserve() {
+        assertThrows(IllegalArgumentException.class, () -> available.reserve(null));
+        assertThrows(IllegalArgumentException.class, () -> available.reserve(" "));
+    }
+
+    @Test
+    void shouldNotReleaseTicketHeldByAnotherOrder() {
+        Ticket reserved = available.reserve("O1");
+
+        assertThrows(TicketNotOwnedException.class, () -> reserved.release("O2"));
+    }
+
+    @Test
+    void shouldNotReleaseSoldTicket() {
+        Ticket sold = available.reserve("O1").startConfirmation("O1").sell("O1");
+
+        assertThrows(InvalidStateTransitionException.class, () -> sold.release("O1"));
     }
 
     @Test
     void shouldGrantComplimentaryTicket() {
-        Ticket complimentary = available.grantComplimentary("O1");
+        Ticket complimentary = available.grantComplimentary();
 
         assertEquals(TicketStatus.COMPLIMENTARY, complimentary.status());
+        assertNull(complimentary.orderId());
     }
 
     @Test
-    void shouldDetectExpiredReservation() {
-        Ticket reserved = available.reserve("O1", EXPIRES_AT);
+    void shouldNotGrantReservedTicketAsComplimentary() {
+        Ticket reserved = available.reserve("O1");
 
-        assertTrue(reserved.isReservationExpired(EXPIRES_AT.plusSeconds(1)));
-        assertFalse(reserved.isReservationExpired(EXPIRES_AT.minusSeconds(1)));
-    }
-
-    @Test
-    void shouldNotExpireTicketThatIsNotReserved() {
-        assertFalse(available.isReservationExpired(EXPIRES_AT));
+        assertThrows(InvalidStateTransitionException.class, reserved::grantComplimentary);
     }
 
     @Test
     void shouldRequireMandatoryFields() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new Ticket(null, "E1", TicketStatus.AVAILABLE, null, 0));
+        assertThrows(IllegalArgumentException.class,
+                () -> new Ticket("T1", " ", TicketStatus.AVAILABLE, null, 0));
         assertThrows(NullPointerException.class,
-                () -> new Ticket(null, "E1", TicketStatus.AVAILABLE, null, null, 0));
+                () -> new Ticket("T1", "E1", null, null, 0));
+    }
+
+    @Test
+    void shouldRequireOrderWhenHeld() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new Ticket("T1", "E1", TicketStatus.RESERVED, null, 1));
+    }
+
+    @Test
+    void shouldRejectOrderWhenAvailable() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new Ticket("T1", "E1", TicketStatus.AVAILABLE, "O1", 0));
     }
 }

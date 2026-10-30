@@ -23,7 +23,7 @@ class EventTest {
 
     @Test
     void shouldRequireId() {
-        assertThrows(NullPointerException.class,
+        assertThrows(IllegalArgumentException.class,
                 () -> new Event(null, "Rock Fest", DATE, "Movistar Arena", 100));
     }
 
@@ -50,9 +50,17 @@ class EventTest {
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {0, -1})
-    void shouldRejectNonPositiveCapacity(int capacity) {
+    @ValueSource(ints = {0, Event.MAX_CAPACITY + 1})
+    void shouldRejectCapacityOutOfRange(int capacity) {
         assertThrows(IllegalArgumentException.class,
                 () -> new Event("E1", "Rock Fest", DATE, "Movistar Arena", capacity));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, Event.MAX_CAPACITY})
+    void shouldAcceptCapacityAtLimits(int capacity) {
+        Event event = new Event("E1", "Rock Fest", DATE, "Movistar Arena", capacity);
+
+        assertEquals(capacity, event.totalCapacity());
     }
 }
