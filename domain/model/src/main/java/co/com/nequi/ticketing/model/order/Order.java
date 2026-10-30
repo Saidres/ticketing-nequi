@@ -37,11 +37,15 @@ public record Order(String id, String eventId, String customerId, int quantity, 
         return new Order(id, eventId, customerId, quantity, OrderStatus.PENDING, createdAt, null, 0L);
     }
 
-    public Order reserve(Instant now, Duration ttl) {
-        if (ttl.isNegative() || ttl.isZero() || ttl.compareTo(MAX_RESERVATION_TTL) > 0) {
+    public static Duration requireValidReservationTtl(Duration ttl) {
+        if (ttl == null || ttl.isNegative() || ttl.isZero() || ttl.compareTo(MAX_RESERVATION_TTL) > 0) {
             throw new IllegalArgumentException("ttl must be between 1 second and " + MAX_RESERVATION_TTL);
         }
-        return transitionTo(OrderStatus.RESERVED, now.plus(ttl));
+        return ttl;
+    }
+
+    public Order reserve(Instant now, Duration ttl) {
+        return transitionTo(OrderStatus.RESERVED, now.plus(requireValidReservationTtl(ttl)));
     }
 
     public Order reject() {
