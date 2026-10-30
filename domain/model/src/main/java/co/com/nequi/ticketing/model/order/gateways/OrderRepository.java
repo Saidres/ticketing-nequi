@@ -8,7 +8,8 @@ import java.time.Instant;
 
 public interface OrderRepository {
 
-    Mono<Order> save(Order order);
+    // Fails with ConcurrencyConflictException if the id already exists
+    Mono<Order> create(Order order);
 
     // Conditional on the stored version being version - 1, else ConcurrencyConflictException
     Mono<Order> update(Order order);
