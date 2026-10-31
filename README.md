@@ -71,6 +71,12 @@ docker compose up -d dynamodb-local localstack init-aws
 
 La colección de Postman está en [`postman/ticketing.postman_collection.json`](postman/ticketing.postman_collection.json). Encadena el flujo completo con variables.
 
+Para ejecutarla completa desde la terminal con Newman (la app debe estar arriba con `docker compose up`):
+```bash
+docker run --rm -v "$(pwd)/postman:/etc/newman" postman/newman:6-alpine run ticketing.postman_collection.json   --env-var "baseUrl=http://host.docker.internal:8080/api/v1" --delay-request 1500   --folder "1. Events" --folder "2. Purchase flow" --folder "3. Errors"
+```
+La carpeta `4. Live stream (manual)` contiene el stream SSE, que no termina nunca; se observa en Postman o con `curl -N`.
+
 | Método | Ruta | Descripción | Respuesta |
 |---|---|---|---|
 | `POST` | `/api/v1/events` | Crea un evento y su inventario | `201` |
