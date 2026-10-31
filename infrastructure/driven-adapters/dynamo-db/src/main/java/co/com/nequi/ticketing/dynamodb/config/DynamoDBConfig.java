@@ -14,9 +14,13 @@ import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClientBuilder;
 
 import java.net.URI;
+import java.time.Duration;
 
 @Configuration
 public class DynamoDBConfig {
+
+    // A slow DynamoDB call fails instead of holding the request; the SDK still retries transient errors within it
+    private static final Duration API_CALL_TIMEOUT = Duration.ofSeconds(3);
 
     @Bean
     public DynamoDbAsyncClient dynamoDbAsyncClient(@Value("${aws.region}") String region,
@@ -24,7 +28,7 @@ public class DynamoDBConfig {
                                                    MetricPublisher publisher) {
         DynamoDbAsyncClientBuilder builder = DynamoDbAsyncClient.builder()
                 .region(Region.of(region))
-                .overrideConfiguration(o -> o.addMetricPublisher(publisher))
+                .overrideConfiguration(o -> o.addMetricPublisher(publisher).apiCallTimeout(API_CALL_TIMEOUT))
                 .credentialsProvider(credentials(endpoint));
         if (endpoint != null) {
             builder.endpointOverride(URI.create(endpoint));

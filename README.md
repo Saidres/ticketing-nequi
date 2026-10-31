@@ -1,47 +1,367 @@
-# Proyecto Base Implementando Clean Architecture
+# Ticketing — Plataforma reactiva de procesamiento de compras de entradas
 
-## Antes de Iniciar
+Backend reactivo para vender entradas de eventos con picos de demanda **sin sobreventa**. La API recibe la compra, la **encola de inmediato** y responde con un número de orden. Un **consumidor asíncrono** reserva las entradas con **escrituras condicionales en DynamoDB**. Las reservas duran **máximo 10 minutos** y un proceso periódico libera las que vencen.
 
-Empezaremos por explicar los diferentes componentes del proyectos y partiremos de los componentes externos, continuando con los componentes core de negocio (dominio) y por último el inicio y configuración de la aplicación.
+**Stack:** Java 25 · Spring Boot 4.1 · Spring WebFlux · DynamoDB (Local) · SQS (LocalStack) · Resilience4j · Docker · Clean Architecture (Scaffold Bancolombia) · JUnit 5 · Mockito · reactor-test · Testcontainers · ArchUnit · PIT.
 
-Lee el artículo [Clean Architecture — Aislando los detalles](https://medium.com/bancolombia-tech/clean-architecture-aislando-los-detalles-4f9530f35d7a)
+---
 
-# Arquitectura
+## Contenido
+1. [Cómo ejecutarlo](#1-cómo-ejecutarlo)
+2. [Uso de la API](#2-uso-de-la-api)
+3. [Arquitectura](#3-arquitectura)
+4. [Flujos y máquinas de estado](#4-flujos-y-máquinas-de-estado)
+5. [Decisiones de diseño y trade-offs](#5-decisiones-de-diseño-y-trade-offs)
+6. [Concurrencia: cómo se evita la sobreventa](#6-concurrencia-cómo-se-evita-la-sobreventa)
+7. [Seguridad](#7-seguridad)
+8. [Pruebas](#8-pruebas)
+9. [Limitaciones y qué cambiaría en producción](#9-limitaciones-y-qué-cambiaría-en-producción)
 
-![Clean Architecture](https://miro.medium.com/max/1400/1*ZdlHz8B0-qu9Y-QO3AXR_w.png)
+---
 
-## Domain
+## 1. Cómo ejecutarlo
 
-Es el módulo más interno de la arquitectura, pertenece a la capa del dominio y encapsula la lógica y reglas del negocio mediante modelos y entidades del dominio.
+### Requisitos
+- Docker Desktop (con Docker Compose)
+- *(Opcional, para correr sin Docker)* JDK 25
 
-## Usecases
+### Opción A: todo con Docker (recomendado)
+```bash
+docker compose up --build
+```
+Levanta 4 servicios:
 
-Este módulo gradle perteneciente a la capa del dominio, implementa los casos de uso del sistema, define lógica de aplicación y reacciona a las invocaciones desde el módulo de entry points, orquestando los flujos hacia el módulo de entities.
+| Servicio | Qué hace | Puerto |
+|---|---|---|
+| `dynamodb-local` | Base de datos (DynamoDB Local, en memoria) | 8000 |
+| `localstack` | Cola SQS `ticketing-orders` y su DLQ | 4566 |
+| `init-aws` | Crea las tablas, la cola y la DLQ (idempotente), y termina | — |
+| `ticketing` | La aplicación (se compila dentro de Docker) | **8080** |
 
-## Infrastructure
+Verifica que esté arriba:
+```bash
+curl http://localhost:8080/actuator/health   # {"status":"UP"}
+```
+Para apagar todo: `docker compose down`
 
-### Helpers
+### Opción B: la app desde el IDE o Gradle y la infraestructura en Docker
+```bash
+docker compose up -d dynamodb-local localstack init-aws
+./gradlew :app-service:bootRun        # perfil "local" por defecto
+```
 
-En el apartado de helpers tendremos utilidades generales para los Driven Adapters y Entry Points.
+### Configuración (variables de entorno)
+| Variable | Por defecto (perfil `local`) | Descripción |
+|---|---|---|
+| `RESERVATION_TTL` | `10m` | Duración de la reserva. **No puede superar 10 min**: el dominio lo valida al arrancar |
+| `EXPIRATION_SWEEP_INTERVAL` | `30s` | Cada cuánto se liberan las reservas vencidas |
+| `ORDERS_QUEUE_URL` | URL de LocalStack | Cola de órdenes. **Obligatoria fuera de local** (la app no arranca sin ella) |
+| `DYNAMODB_ENDPOINT` / `SQS_ENDPOINT` | `localhost` | Solo en local. En AWS se usa el endpoint regional y el rol IAM |
+| `TABLE_EVENTS`, `TABLE_TICKETS`, `TABLE_ORDERS` | `ticketing-*` | Nombres de tabla configurables (aislamiento de entornos) |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:4200,...` | Orígenes permitidos |
+| `ORDERS_PER_SECOND_PER_CUSTOMER` | `5` | Rate limit de compras por cliente (Resilience4j) |
 
-Estas utilidades no están arraigadas a objetos concretos, se realiza el uso de generics para modelar comportamientos
-genéricos de los diferentes objetos de persistencia que puedan existir, este tipo de implementaciones se realizan
-basadas en el patrón de diseño [Unit of Work y Repository](https://medium.com/@krzychukosobudzki/repository-design-pattern-bc490b256006)
+---
 
-Estas clases no puede existir solas y debe heredarse su compartimiento en los **Driven Adapters**
+## 2. Uso de la API
 
-### Driven Adapters
+La colección de Postman está en [`postman/ticketing.postman_collection.json`](postman/ticketing.postman_collection.json). Encadena el flujo completo con variables.
 
-Los driven adapter representan implementaciones externas a nuestro sistema, como lo son conexiones a servicios rest,
-soap, bases de datos, lectura de archivos planos, y en concreto cualquier origen y fuente de datos con la que debamos
-interactuar.
+| Método | Ruta | Descripción | Respuesta |
+|---|---|---|---|
+| `POST` | `/api/v1/events` | Crea un evento y su inventario | `201` |
+| `GET` | `/api/v1/events` | Lista los eventos | `200` |
+| `GET` | `/api/v1/events/{eventId}` | Consulta un evento | `200` / `404` |
+| `GET` | `/api/v1/events/{eventId}/availability` | Disponibilidad en tiempo real | `200` |
+| `GET` | `/api/v1/events/{eventId}/availability/stream` | Disponibilidad **en vivo** (Server-Sent Events) | `200` `text/event-stream` |
+| `POST` | `/api/v1/orders` | Compra: **encola** y devuelve el id de la orden | **`202`** |
+| `GET` | `/api/v1/orders/{orderId}` | Estado de la orden **y de cada entrada** | `200` / `404` |
+| `POST` | `/api/v1/orders/{orderId}/confirm` | Confirma la compra: las entradas pasan a `SOLD` | `200` / `409` |
 
-### Entry Points
+**Headers:** `X-Customer-Id` (cliente) en las operaciones de órdenes, e `Idempotency-Key` en la compra.
 
-Los entry points representan los puntos de entrada de la aplicación o el inicio de los flujos de negocio.
+### Flujo completo con curl
+```bash
+# 1. Crear un evento con 10 entradas
+curl -X POST localhost:8080/api/v1/events -H 'Content-Type: application/json' \
+  -d '{"name":"Rock Fest","date":"2026-12-01T20:00:00Z","venue":"Movistar Arena","totalCapacity":10}'
 
-## Application
+# 2. Comprar 2 entradas (202 Accepted: la orden queda PENDING y se procesa en segundo plano)
+curl -i -X POST localhost:8080/api/v1/orders -H 'Content-Type: application/json' \
+  -H 'X-Customer-Id: ana' -H 'Idempotency-Key: compra-001' \
+  -d '{"eventId":"<eventId>","quantity":2}'
 
-Este módulo es el más externo de la arquitectura, es el encargado de ensamblar los distintos módulos, resolver las dependencias y crear los beans de los casos de use (UseCases) de forma automática, inyectando en éstos instancias concretas de las dependencias declaradas. Además inicia la aplicación (es el único módulo del proyecto donde encontraremos la función “public static void main(String[] args)”.
+# 3. Consultar la orden: RESERVED, con sus 2 entradas y la hora de vencimiento
+curl localhost:8080/api/v1/orders/<orderId> -H 'X-Customer-Id: ana'
 
-**Los beans de los casos de uso se disponibilizan automaticamente gracias a un '@ComponentScan' ubicado en esta capa.**
+# 4. Confirmar: la orden pasa a CONFIRMED y las entradas a SOLD
+curl -X POST localhost:8080/api/v1/orders/<orderId>/confirm -H 'X-Customer-Id: ana'
+
+# 5. Disponibilidad (o en vivo: curl -N .../availability/stream)
+curl localhost:8080/api/v1/events/<eventId>/availability
+```
+
+Respuesta de una orden (requisito 4: incluye el estado de cada entrada):
+```json
+{
+  "orderId": "47c98d32-567a-3a69-a38f-aabc14e380a4",
+  "status": "RESERVED",
+  "reservedUntil": "2026-10-31T13:54:57.540Z",
+  "tickets": [
+    { "ticketId": "414be903-...-000005", "status": "RESERVED" },
+    { "ticketId": "414be903-...-000001", "status": "RESERVED" }
+  ]
+}
+```
+
+### Errores
+Todos responden con `{"status": <código>, "message": "..."}`:
+
+| Código | Cuándo |
+|---|---|
+| `400` | Datos inválidos, falta un header o el JSON está mal formado |
+| `404` | El evento o la orden no existe, **o la orden es de otro cliente** (no se revela que existe) |
+| `409` | Transición inválida, reserva vencida o conflicto de concurrencia (se puede reintentar) |
+| `415` | Falta `Content-Type: application/json` |
+| `429` | El cliente superó su límite de compras por segundo |
+| `503` | La cola de órdenes no está disponible (circuit breaker abierto): se falla rápido |
+| `500` | Error inesperado (sin detalles internos) |
+
+---
+
+## 3. Arquitectura
+
+Clean Architecture generada con el [Scaffold de Bancolombia](https://github.com/bancolombia/scaffold-clean-architecture). **Las dependencias apuntan hacia adentro:** el dominio no conoce Spring, AWS ni Jackson (lo verifica `ArchitectureTest` con ArchUnit).
+
+```mermaid
+flowchart LR
+    subgraph EP["Entry points"]
+        API["API WebFlux<br/>RouterRest + Handlers"]
+        LIS["SQS Listener"]
+        SCH["Scheduler<br/>reservas vencidas"]
+    end
+    subgraph UC["Casos de uso"]
+        CE[CreateEvent]
+        QE[QueryEvents]
+        PO[PlaceOrder]
+        PR[ProcessOrder]
+        CO[ConfirmOrder]
+        GO[GetOrder]
+        GA[GetAvailability]
+        RE[ReleaseExpiredReservations]
+    end
+    subgraph DM["Dominio (Java puro + Reactor)"]
+        M["Ticket · Order · Event<br/>máquinas de estado"]
+        P["Puertos (gateways)"]
+    end
+    subgraph DA["Driven adapters"]
+        DDB["DynamoDB adapter<br/>escrituras condicionales<br/>TransactWriteItems"]
+        SND["SQS sender"]
+    end
+    API --> CE & QE & PO & CO & GO & GA
+    LIS --> PR
+    SCH --> RE
+    UC --> M
+    UC --> P
+    DDB -. implementa .-> P
+    SND -. implementa .-> P
+    DDB --> D[(DynamoDB)]
+    SND --> Q[[SQS]]
+    Q --> LIS
+```
+
+| Módulo | Contenido |
+|---|---|
+| `domain/model` | Entidades inmutables (records), máquinas de estado, excepciones `sealed` y puertos |
+| `domain/usecase` | Un caso de uso por acción. Solo conoce el dominio y los puertos |
+| `infrastructure/driven-adapters/dynamo-db` | Repositorios y transacción con `DynamoDbAsyncClient` (no bloqueante) |
+| `infrastructure/driven-adapters/sqs-sender` | Publica el `orderId` en la cola |
+| `infrastructure/entry-points/reactive-web` | API REST y SSE con router functions, y mapeo de errores a HTTP |
+| `infrastructure/entry-points/sqs-listener` | Consume la cola y llama a `ProcessOrderUseCase` |
+| `infrastructure/entry-points/scheduler` | Libera las reservas vencidas cada `EXPIRATION_SWEEP_INTERVAL` |
+| `applications/app-service` | Arranque, configuración y wiring |
+
+### Modelo de datos en DynamoDB (3 tablas)
+| Tabla | Llave | Índices (GSI) | Para qué |
+|---|---|---|---|
+| `ticketing-events` | `eventId` | — | Eventos |
+| `ticketing-tickets` | `ticketId` | `eventStatus` (`E1#AVAILABLE`) + `shuffle` · `orderId` | Buscar y **contar** entradas por estado; entradas de una orden |
+| `ticketing-orders` | `orderId` | `status` + `reservedUntil` (**disperso**) | Encontrar las reservas vencidas |
+
+---
+
+## 4. Flujos y máquinas de estado
+
+### Compra (asíncrona)
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Cliente
+    participant API as API WebFlux
+    participant PO as PlaceOrder
+    participant Q as SQS
+    participant L as Listener
+    participant PR as ProcessOrder
+    participant DB as DynamoDB
+
+    C->>API: POST /orders (Idempotency-Key)
+    API->>PO: execute
+    PO->>DB: ¿existe la orden? (id = UUID(cliente + clave))
+    alt ya existe (reintento / doble clic)
+        PO-->>C: 202 la misma orden
+    else nueva
+        PO->>DB: create orden PENDING (solo si no existe)
+        PO->>Q: publish(orderId)
+        PO-->>C: 202 Accepted + Location
+    end
+    Q->>L: mensaje (at-least-once)
+    L->>PR: execute(orderId)
+    PR->>DB: orden PENDING? buscar N entradas AVAILABLE (inicio aleatorio)
+    alt hay suficientes
+        PR->>DB: TransactWriteItems: orden RESERVED + N entradas RESERVED<br/>condición version = esperada
+        Note over PR,DB: si otro consumidor ganó → conflicto → reintento con backoff
+    else no alcanzan
+        PR->>DB: orden REJECTED
+    end
+    L->>Q: delete (solo si se procesó bien)
+```
+
+### Confirmación y expiración
+```mermaid
+sequenceDiagram
+    actor C as Cliente
+    participant CO as ConfirmOrder
+    participant RE as Scheduler / ReleaseExpired
+    participant DB as DynamoDB
+    C->>CO: POST /orders/{id}/confirm
+    CO->>DB: tx 1: orden CONFIRMING + entradas PENDING_CONFIRMATION
+    CO->>DB: tx 2: orden CONFIRMED + entradas SOLD
+    Note over CO,RE: Si el scheduler vence la orden primero, la versión cambia<br/>y la confirmación falla (409). Si gana la confirmación,<br/>la orden ya no está RESERVED y el scheduler no la toca.
+    RE->>DB: órdenes RESERVED vencidas → EXPIRED + entradas AVAILABLE
+```
+
+### Máquinas de estado
+La **entrada** usa los 5 estados del enunciado. La **orden** tiene su propio ciclo de vida (ver la decisión D1).
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    state "Entrada" as T {
+        [*] --> AVAILABLE
+        AVAILABLE --> RESERVED: reserva
+        AVAILABLE --> COMPLIMENTARY: cortesía
+        RESERVED --> AVAILABLE: vence
+        RESERVED --> PENDING_CONFIRMATION: confirma
+        PENDING_CONFIRMATION --> SOLD
+        SOLD --> [*]
+        COMPLIMENTARY --> [*]
+    }
+```
+```mermaid
+stateDiagram-v2
+    direction LR
+    state "Orden" as O {
+        [*] --> PENDING: compra encolada
+        PENDING --> RESERVED: hay entradas
+        PENDING --> REJECTED: no hay cupo
+        RESERVED --> CONFIRMING: confirma
+        RESERVED --> EXPIRED: pasaron 10 min
+        CONFIRMING --> CONFIRMED
+    }
+```
+
+---
+
+## 5. Decisiones de diseño y trade-offs
+
+| # | Decisión | Por qué | Trade-off |
+|---|---|---|---|
+| D1 | **Dos máquinas de estado separadas (entrada y orden)** | El requisito 4 usa los estados de la *entrada* para describir la *orden*. Pero una orden puede ser rechazada o expirar, y agrupa varias entradas | La consulta de la orden devuelve **ambos**, así que el requisito se cumple literalmente |
+| D2 | **Una sola fuente de verdad** | La relación orden↔entrada vive solo en `Ticket.orderId`; el vencimiento solo en `Order.reservedUntil`; la disponibilidad se **calcula** contando, no se guarda | Contar es más caro que leer un contador (ver §9) |
+| D3 | **Orden + entradas en una sola transacción** (`TransactWriteItems`) | No existe un estado intermedio como "entradas reservadas con la orden PENDING" | Máximo 100 ítems por transacción (usamos ≤ 7) |
+| D4 | **Compra idempotente**: `orderId = UUID(len:cliente:Idempotency-Key)` | Un doble clic o un reintento de red no crea 2 órdenes. No hace falta una tabla aparte | Reutilizar una clave con otro payload devuelve la orden original |
+| D5 | **Consumidor idempotente** | SQS entrega *al menos una vez*: si la orden ya no está PENDING, se ignora el mensaje | — |
+| D6 | **Reintentos solo de conflictos** (`Retry.backoff(3, 50ms)` con jitter) | Los errores de negocio (`sealed BusinessException`) siempre fallarían igual. Tras 3 conflictos el mensaje vuelve a SQS y, tras 5 intentos, a la **DLQ** | — |
+| D7 | **Estado `CONFIRMING` en la orden** | La entrada debe pasar por `PENDING_CONFIRMATION`; cada transacción hace un solo cambio de versión. Si se cae a mitad, reintentar confirmar lo completa | Dos escrituras en vez de una |
+| D8 | **Búsqueda con inicio aleatorio (`shuffle`)** | Con miles de consumidores, cada uno empieza en un punto distinto del índice y no pelean por las mismas entradas | — |
+| D9 | **TTL configurable con tope en el dominio** | Operaciones ajusta la duración sin tocar código; el dominio impide superar los 10 min del requisito (*fail-fast* al arrancar) | — |
+| D10 | **Cliente DynamoDB directo + mappers explícitos** | La plantilla del Scaffold no soportaba escrituras condicionales, transacciones ni conteos y solo leía una página | Más código de mapeo, pero sin magia |
+| D11 | **Sin Virtual Threads** | WebFlux ya es no bloqueante. Los Virtual Threads resuelven el mismo problema, pero para código bloqueante | — |
+| D12 | **Records en vez de Lombok** | Inmutabilidad nativa de Java y dominio sin dependencias | — |
+| D13 | **Resiliencia en dos niveles** | Los reintentos por concurrencia son **regla de negocio** (Reactor, en el caso de uso). Las fallas de **infraestructura** se manejan con Resilience4j en los bordes: rate limiter por cliente en la compra, circuit breaker en el envío a SQS y timeouts del SDK en DynamoDB y SQS | El rate limiter vive en memoria de cada instancia (ver §9) |
+
+### Java moderno usado
+Records (16) · `switch` exhaustivo (14) · `sealed` (17) · *pattern matching* en `switch` (21) · variables sin nombre `_` (22) · `List.getFirst()` de colecciones secuenciadas (21) · `String.formatted` (15).
+
+---
+
+## 6. Concurrencia: cómo se evita la sobreventa
+
+1. **Optimistic locking real:** cada escritura lleva `ConditionExpression: version = :expected`. Si otro proceso cambió el ítem, **DynamoDB rechaza** la escritura (`ConditionalCheckFailed`), y el adaptador la traduce a `ConcurrencyConflictException`.
+2. **Atomicidad:** la orden y sus N entradas se escriben **todo o nada**.
+3. **Defensa contra lecturas viejas:** antes de escribir, `Order.requireOwnTickets` verifica que la orden vea exactamente sus N entradas en el estado esperado, porque los GSI son eventualmente consistentes.
+4. **Carrera confirmar ↔ expirar:** la decide la versión de la orden (ver el diagrama).
+
+**Evidencia:**
+- `DynamoRepositoriesIntegrationTest.shouldNeverHandTheSameTicketsToTwoConcurrentTransactions`: 10 transacciones simultáneas por las mismas 2 entradas contra **DynamoDB Local real** → gana exactamente 1.
+- Prueba de punta a punta con docker-compose: **10 compras simultáneas de 2 entradas para 8 disponibles → 4 `RESERVED`, 6 `REJECTED`, disponibilidad final 0**.
+
+---
+
+## 7. Seguridad
+
+| Riesgo | Mitigación |
+|---|---|
+| Reintentos maliciosos y doble clic | Compra idempotente (D4) y consumidor idempotente (D5) |
+| Ver o confirmar la orden de otro | Se verifica el dueño; se responde `404` (no `403`) para no revelar qué ids existen. Las entradas también validan su orden dueña |
+| Abuso de recursos | **Rate limiter por cliente** en la compra (`429`), máximo **6 entradas por orden** y **100.000** por evento, validación **antes** de leer la base de datos, y el stream SSE se corta a los 10 min |
+| Fuga de información | Los `500` no exponen detalles; headers de seguridad (CSP, HSTS, `nosniff`); CORS restringido a orígenes configurados |
+| Secretos y credenciales | **No hay credenciales en el código ni en el repositorio.** En AWS se usa la cadena por defecto (rol IAM / web identity); en local, credenciales de mentira solo cuando hay un endpoint local |
+| Contenedor | Imagen de runtime solo con JRE y usuario **no root** |
+
+---
+
+## 8. Pruebas
+
+```bash
+./gradlew test jacocoTestReport -x pitest   # todos los tests + cobertura (los de integración necesitan Docker)
+./gradlew :model:pitest :usecase:pitest     # pruebas de mutación del dominio y los casos de uso
+```
+
+**Cobertura de líneas (JaCoCo): 95% en total** (663 de 698 líneas) · **232 tests** · PIT: 84% de mutantes eliminados.
+
+| Módulo | Cobertura |
+|---|---|
+| `domain/model` | 96% |
+| `domain/usecase` | **100%** |
+| `dynamo-db` | 92% |
+| `sqs-sender` | 100% |
+| `sqs-listener` | 85% |
+| `reactive-web` | 99% |
+| `scheduler` | 95% |
+| `app-service` | 0% (solo `main` y la configuración de beans) |
+
+| Tipo | Herramienta | Qué cubre |
+|---|---|---|
+| Unitarias de dominio | JUnit 5, `@ParameterizedTest` | Las 25 + 36 transiciones de estado, invariantes y valores límite |
+| Casos de uso | Mockito + `StepVerifier` (con tiempo virtual para los reintentos) | Flujos felices, errores, idempotencia y carreras entre consumidores |
+| Componentes reactivos | `WebTestClient` | Endpoints, códigos HTTP y SSE |
+| Integración | **Testcontainers + DynamoDB Local** | Escrituras condicionales, transacciones, índices y concurrencia real |
+| Arquitectura | ArchUnit (`ArchitectureTest`) | Reglas de Clean Architecture |
+| Mutación | PIT | Que los tests detecten cambios reales en la lógica del dominio |
+
+---
+
+## 9. Limitaciones y qué cambiaría en producción
+
+| Hoy | En producción |
+|---|---|
+| La disponibilidad **cuenta** el índice en cada consulta (barato hasta miles de entradas) | Un contador desnormalizado por evento, actualizado **en la misma transacción** que la reserva, y/o una caché corta |
+| Auditoría: cada transición persistida queda en el logger `audit.transitions` (orden, estado, versión, cliente y estado de cada entrada), y `version` cuenta los cambios | Una tabla de historial escrita en la misma transacción, o DynamoDB Streams → S3, con retención |
+| `X-Customer-Id` por header (no había autenticación en el alcance) | Identidad desde un JWT (Cognito / API Gateway authorizer) |
+| El pago está fuera del alcance: confirmar = pagar | Integración con una pasarela y su webhook; `PENDING_CONFIRMATION` mientras se espera el pago |
+| Índice de vencimientos con una sola partición `RESERVED` | Particionar por evento o por bucket de tiempo para evitar una partición caliente |
+| Crear un evento de 100.000 entradas son ~4.000 `BatchWriteItem` en la petición | Crear el inventario de forma asíncrona (cola), con estado "publicando" |
+| Rate limiter en memoria por instancia | Rate limiting distribuido (API Gateway usage plans / WAF o Redis) |
+| Métricas en `/actuator/prometheus` | Dashboards y alarmas (CloudWatch / Grafana), trazas distribuidas (OpenTelemetry) y alarma sobre mensajes en la DLQ |
+| La cortesía (`COMPLIMENTARY`) existe en el dominio, pero no tiene endpoint | Un endpoint administrativo protegido para asignar cortesías |

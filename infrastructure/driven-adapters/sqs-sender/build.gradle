@@ -2,4 +2,6 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-autoconfigure'
     implementation 'org.apache.logging.log4j:log4j-api'
     implementation 'software.amazon.awssdk:sqs'
+    implementation 'io.github.resilience4j:resilience4j-circuitbreaker:2.3.0'
+    implementation 'io.github.resilience4j:resilience4j-reactor:2.3.0'
 }

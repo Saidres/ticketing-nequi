@@ -1,6 +1,9 @@
 package co.com.nequi.ticketing.sqs.sender;
 
+import co.com.nequi.ticketing.sqs.sender.config.SQSSenderConfig;
 import co.com.nequi.ticketing.sqs.sender.config.SQSSenderProperties;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -18,6 +21,7 @@ import java.util.function.Consumer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -27,6 +31,8 @@ class SQSSenderTest {
 
     @Mock
     private SqsAsyncClient client;
+
+    private final CircuitBreaker circuitBreaker = new SQSSenderConfig().sqsSenderCircuitBreaker();
 
     @Test
     @SuppressWarnings("unchecked")
@@ -53,7 +59,16 @@ class SQSSenderTest {
         StepVerifier.create(sender().publish("O1")).expectError(SqsException.class).verify();
     }
 
+    @Test
+    void shouldFailFastWithoutCallingSqsWhileTheCircuitIsOpen() {
+        circuitBreaker.transitionToOpenState();
+
+        StepVerifier.create(sender().publish("O1")).expectError(CallNotPermittedException.class).verify();
+
+        verifyNoInteractions(client);
+    }
+
     private SQSSender sender() {
-        return new SQSSender(client, new SQSSenderProperties("us-east-1", QUEUE_URL, null));
+        return new SQSSender(client, new SQSSenderProperties("us-east-1", QUEUE_URL, null), circuitBreaker);
     }
 }

@@ -14,6 +14,7 @@ import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryResponse;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 import static co.com.nequi.ticketing.dynamodb.ItemMappers.ORDER_ID;
@@ -38,6 +39,7 @@ public class OrderDynamoRepository implements OrderRepository {
                         .item(ItemMappers.toItem(order))
                         .conditionExpression("attribute_not_exists(#orderId)")
                         .expressionAttributeNames(Map.of("#orderId", ORDER_ID))))
+                .doOnSuccess(created -> AuditLog.committed(order, List.of()))
                 .thenReturn(order)
                 .onErrorMap(ConditionalCheckFailedException.class, conflict -> conflictOn(order));
     }
@@ -50,6 +52,7 @@ public class OrderDynamoRepository implements OrderRepository {
                         .conditionExpression(ConditionalWrites.UNCHANGED)
                         .expressionAttributeNames(ConditionalWrites.UNCHANGED_NAMES)
                         .expressionAttributeValues(ConditionalWrites.unchangedValues(order.version()))))
+                .doOnSuccess(updated -> AuditLog.committed(order, List.of()))
                 .thenReturn(order)
                 .onErrorMap(ConditionalCheckFailedException.class, conflict -> conflictOn(order));
     }

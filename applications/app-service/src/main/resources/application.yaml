@@ -39,3 +39,5 @@ cors:
 ticketing:
   reservation-ttl: "${RESERVATION_TTL:10m}"
   expiration-sweep-interval: "${EXPIRATION_SWEEP_INTERVAL:30s}"
+  rate-limit:
+    orders-per-second: "${ORDERS_PER_SECOND_PER_CUSTOMER:5}"

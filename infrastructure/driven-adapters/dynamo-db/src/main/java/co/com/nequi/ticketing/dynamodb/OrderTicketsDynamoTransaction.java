@@ -35,6 +35,7 @@ public class OrderTicketsDynamoTransaction implements OrderTicketsTransaction {
                 .map(put -> TransactWriteItem.builder().put(put).build())
                 .toList();
         return Mono.fromFuture(() -> client.transactWriteItems(request -> request.transactItems(writes)))
+                .doOnSuccess(committed -> AuditLog.committed(order, tickets))
                 .onErrorMap(error -> error instanceof TransactionCanceledException canceled
                                 && ConditionalWrites.isConflict(canceled),
                         conflict -> new ConcurrencyConflictException("Order", order.id()))

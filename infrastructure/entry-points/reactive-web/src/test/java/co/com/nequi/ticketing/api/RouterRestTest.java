@@ -1,5 +1,6 @@
 package co.com.nequi.ticketing.api;
 
+import co.com.nequi.ticketing.api.config.RateLimitConfig;
 import co.com.nequi.ticketing.model.event.Event;
 import co.com.nequi.ticketing.model.exception.ConcurrencyConflictException;
 import co.com.nequi.ticketing.model.exception.EventNotFoundException;
@@ -19,6 +20,8 @@ import co.com.nequi.ticketing.usecase.getorder.OrderDetails;
 import co.com.nequi.ticketing.usecase.placeorder.PlaceOrderCommand;
 import co.com.nequi.ticketing.usecase.placeorder.PlaceOrderUseCase;
 import co.com.nequi.ticketing.usecase.queryevents.QueryEventsUseCase;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -65,7 +68,8 @@ class RouterRestTest {
     @BeforeEach
     void setUp() {
         EventHandler events = new EventHandler(createEventUseCase, queryEventsUseCase, getAvailabilityUseCase);
-        OrderHandler orders = new OrderHandler(placeOrderUseCase, getOrderUseCase, confirmOrderUseCase);
+        OrderHandler orders = new OrderHandler(placeOrderUseCase, getOrderUseCase, confirmOrderUseCase,
+                new RateLimitConfig().rateLimiterRegistry(2));
         client = WebTestClient.bindToRouterFunction(new RouterRest().routerFunction(events, orders)).build();
     }
 
@@ -186,6 +190,34 @@ class RouterRestTest {
                 .expectStatus().isAccepted()
                 .expectHeader().location("/api/v1/orders/O1")
                 .expectBody().jsonPath("$.status").isEqualTo("PENDING");
+    }
+
+    @Test
+    void shouldAnswerTooManyRequestsWhenACustomerExceedsTheRateLimit() {
+        when(placeOrderUseCase.execute(any())).thenReturn(Mono.just(PENDING));
+
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            purchaseBy("greedy", "key-" + attempt).expectStatus().isAccepted();
+        }
+        purchaseBy("greedy", "key-3").expectStatus().isEqualTo(429);
+        purchaseBy("someone-else", "key-1").expectStatus().isAccepted();
+    }
+
+    @Test
+    void shouldAnswerServiceUnavailableWhileTheQueueCircuitIsOpen() {
+        when(placeOrderUseCase.execute(any())).thenReturn(Mono.error(
+                CallNotPermittedException.createCallNotPermittedException(CircuitBreaker.ofDefaults("sqs-sender"))));
+
+        purchaseBy("C1", "key-1").expectStatus().isEqualTo(503);
+    }
+
+    private WebTestClient.ResponseSpec purchaseBy(String customerId, String idempotencyKey) {
+        return client.post().uri("/api/v1/orders")
+                .header(Requests.CUSTOMER_ID, customerId)
+                .header(Requests.IDEMPOTENCY_KEY, idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("eventId", "E1", "quantity", 2))
+                .exchange();
     }
 
     @Test

@@ -8,6 +8,8 @@ import co.com.nequi.ticketing.model.exception.InvalidStateTransitionException;
 import co.com.nequi.ticketing.model.exception.OrderNotFoundException;
 import co.com.nequi.ticketing.model.exception.ReservationExpiredException;
 import co.com.nequi.ticketing.model.exception.TicketNotOwnedException;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.http.HttpStatus;
@@ -37,6 +39,8 @@ final class ApiErrors {
             case BusinessException business -> statusOf(business);
             case ConcurrencyConflictException _ -> HttpStatus.CONFLICT;
             case IllegalArgumentException _ -> HttpStatus.BAD_REQUEST;
+            case RequestNotPermitted _ -> HttpStatus.TOO_MANY_REQUESTS;
+            case CallNotPermittedException _ -> HttpStatus.SERVICE_UNAVAILABLE;
             case ResponseStatusException web -> HttpStatus.valueOf(web.getStatusCode().value());
             default -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
