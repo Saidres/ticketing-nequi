@@ -408,6 +408,10 @@ cd deployment/terraform
 terraform init -backend-config=environments/dev.backend.hcl
 terraform plan  -var-file=environments/dev.tfvars
 terraform apply -var-file=environments/dev.tfvars
+
+# Antes de que el servicio arranque: cargar la clave de admin en el secreto que creó Terraform
+# (vacío a propósito, para que el valor nunca quede en el código ni en el estado de Terraform)
+aws secretsmanager put-secret-value --secret-id ticketing-dev/admin-api-key --secret-string '<clave-segura>'
 ```
 
 | Archivo | Contenido |
@@ -423,7 +427,7 @@ terraform apply -var-file=environments/dev.tfvars
 | Tema | Decisión | Por qué |
 |---|---|---|
 | **Networking** | La app vive en **subredes privadas**; solo el ALB es público. **VPC Endpoints** para DynamoDB (gateway, gratis) y SQS | El tráfico a los servicios de AWS no sale a internet, y se ahorra el costo de datos por NAT |
-| **Seguridad** | Security groups encadenados (internet → ALB:443 → app:8080). Rol IAM **de mínimo privilegio**: solo las acciones que usa la app, sobre sus 3 tablas, sus índices y su cola. Cifrado en reposo en DynamoDB y SQS. TLS 1.3 en el ALB. ECR con imágenes **inmutables** y escaneo de vulnerabilidades. **Sin secretos**: la app usa el rol de la tarea | Defensa en profundidad; un contenedor comprometido no puede tocar otros recursos |
+| **Seguridad** | Security groups encadenados (internet → ALB:443 → app:8080). Rol IAM **de mínimo privilegio**: solo las acciones que usa la app, sobre sus 3 tablas, sus índices y su cola. Cifrado en reposo en DynamoDB y SQS. TLS 1.3 en el ALB. ECR con imágenes **inmutables** y escaneo de vulnerabilidades. **Sin credenciales de AWS en la app** (usa el rol de la tarea); la única clave, la de admin, llega desde **Secrets Manager** y nunca queda en el código ni en el estado de Terraform | Defensa en profundidad; un contenedor comprometido no puede tocar otros recursos |
 | **Escalabilidad** | DynamoDB **on-demand**; ECS con autoescalado por CPU (1-2 tareas en dev, 2-10 en prod) en 2 AZ | Las ventas de entradas son picos impredecibles: on-demand los absorbe sin aprovisionar capacidad |
 | **Resiliencia** | 2 AZ, *deployment circuit breaker* con rollback automático, PITR (recuperación a cualquier punto de los últimos 35 días) y *deletion protection* en prod | Un despliegue roto se revierte solo; no se pierden datos |
 | **Aislamiento de entornos** | El mismo código con `dev.tfvars` / `prod.tfvars` y **un estado remoto por entorno** (S3 con bloqueo). Nombres con sufijo de entorno | `dev` no puede romper `prod`; los cambios se prueban primero en dev |

@@ -1,6 +1,7 @@
 package co.com.nequi.ticketing.dynamodb;
 
 import co.com.nequi.ticketing.model.exception.ConcurrencyConflictException;
+import co.com.nequi.ticketing.model.ticket.Ticket;
 import reactor.core.publisher.Mono;
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
@@ -29,6 +30,10 @@ final class ConditionalWrites {
     // Optimistic locking: the write only succeeds if nobody changed the item since it was read
     static Map<String, AttributeValue> unchangedValues(long newVersion) {
         return Map.of(":expected", Items.number(newVersion - 1));
+    }
+
+    static Put putTicketIfUnchanged(DynamoDbTables tables, Ticket ticket) {
+        return putIfUnchanged(tables.tickets(), ItemMappers.toItem(ticket), ticket.version());
     }
 
     static Put putIfUnchanged(String table, Map<String, AttributeValue> item, long newVersion) {

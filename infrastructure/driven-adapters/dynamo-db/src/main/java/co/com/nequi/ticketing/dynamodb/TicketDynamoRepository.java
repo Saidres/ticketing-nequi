@@ -31,6 +31,8 @@ import static co.com.nequi.ticketing.dynamodb.ItemMappers.eventStatus;
 public class TicketDynamoRepository implements TicketRepository {
 
     private static final int BATCH_SIZE = 25;
+    // DynamoDB limit for a single TransactWriteItems call
+    static final int MAX_TRANSACTION_ITEMS = 100;
     private static final int PARALLEL_BATCHES = 8;
     private static final int MAX_BATCH_ATTEMPTS = 5;
     private static final Duration FIRST_BATCH_BACKOFF = Duration.ofMillis(50);
@@ -61,13 +63,16 @@ public class TicketDynamoRepository implements TicketRepository {
                 .then();
     }
 
-    // At most GrantComplimentaryTicketsUseCase.MAX_PER_REQUEST tickets, under the 100-item transaction limit
     @Override
     public Mono<Void> updateAll(List<Ticket> tickets) {
-        List<Put> puts = tickets.stream()
-                .map(ticket -> ConditionalWrites.putIfUnchanged(tables.tickets(), ItemMappers.toItem(ticket),
-                        ticket.version()))
-                .toList();
+        if (tickets.isEmpty()) {
+            return Mono.empty();
+        }
+        if (tickets.size() > MAX_TRANSACTION_ITEMS) {
+            return Mono.error(new IllegalArgumentException(
+                    "a transaction accepts at most %d tickets".formatted(MAX_TRANSACTION_ITEMS)));
+        }
+        List<Put> puts = tickets.stream().map(ticket -> ConditionalWrites.putTicketIfUnchanged(tables, ticket)).toList();
         return ConditionalWrites.writeAtomically(client, puts,
                         () -> new ConcurrencyConflictException("Ticket", tickets.getFirst().id()))
                 .doOnSuccess(committed -> AuditLog.committed(tickets));

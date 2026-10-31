@@ -29,8 +29,7 @@ public class OrderTicketsDynamoTransaction implements OrderTicketsTransaction {
         List<Put> puts = Stream.concat(
                         Stream.of(ConditionalWrites.putIfUnchanged(tables.orders(), ItemMappers.toItem(order),
                                 order.version())),
-                        tickets.stream().map(ticket -> ConditionalWrites.putIfUnchanged(tables.tickets(),
-                                ItemMappers.toItem(ticket), ticket.version())))
+                        tickets.stream().map(ticket -> ConditionalWrites.putTicketIfUnchanged(tables, ticket)))
                 .toList();
         return ConditionalWrites.writeAtomically(client, puts, () -> new ConcurrencyConflictException("Order", order.id()))
                 .doOnSuccess(committed -> AuditLog.committed(order, tickets));

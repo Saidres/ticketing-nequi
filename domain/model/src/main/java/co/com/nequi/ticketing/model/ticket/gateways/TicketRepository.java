@@ -11,7 +11,8 @@ public interface TicketRepository {
 
     Mono<Void> saveAll(List<Ticket> tickets);
 
-    // All-or-nothing, conditional on each stored version being version - 1, else ConcurrencyConflictException
+    // All-or-nothing (at most 100 tickets), conditional on each stored version being version - 1,
+    // else ConcurrencyConflictException
     Mono<Void> updateAll(List<Ticket> tickets);
 
     // Returns min(limit, available) tickets in random order, so concurrent consumers do not compete for the same ones

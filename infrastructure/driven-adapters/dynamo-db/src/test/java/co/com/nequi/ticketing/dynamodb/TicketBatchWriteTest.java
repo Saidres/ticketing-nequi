@@ -16,10 +16,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
+import java.util.stream.IntStream;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -48,6 +50,26 @@ class TicketBatchWriteTest {
                 .verifyComplete();
 
         verify(client, times(2)).batchWriteItem(any(Consumer.class));
+    }
+
+    @Test
+    void shouldNotCallDynamoDbForAnEmptyUpdate() {
+        StepVerifier.create(new TicketDynamoRepository(client, TABLES).updateAll(List.of())).verifyComplete();
+
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void shouldRejectMoreTicketsThanATransactionAccepts() {
+        List<Ticket> tooMany = IntStream.rangeClosed(1, TicketDynamoRepository.MAX_TRANSACTION_ITEMS + 1)
+                .mapToObj(seat -> Ticket.available("E1-%06d".formatted(seat), "E1"))
+                .toList();
+
+        StepVerifier.create(new TicketDynamoRepository(client, TABLES).updateAll(tooMany))
+                .expectError(IllegalArgumentException.class)
+                .verify();
+
+        verifyNoInteractions(client);
     }
 
     @Test
