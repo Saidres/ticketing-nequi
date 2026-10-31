@@ -18,8 +18,16 @@ final class AuditLog {
 
     static void committed(Order order, List<Ticket> tickets) {
         log.info("order={} status={} version={} customer={} tickets=[{}]", order.id(), order.status(),
-                order.version(), order.customerId(), tickets.stream()
-                        .map(ticket -> ticket.id() + ":" + ticket.status() + ":v" + ticket.version())
-                        .collect(Collectors.joining(",")));
+                order.version(), order.customerId(), describe(tickets));
+    }
+
+    static void committed(List<Ticket> tickets) {
+        log.info("tickets=[{}]", describe(tickets));
+    }
+
+    private static String describe(List<Ticket> tickets) {
+        return tickets.stream()
+                .map(ticket -> ticket.id() + ":" + ticket.status() + ":v" + ticket.version())
+                .collect(Collectors.joining(","));
     }
 }

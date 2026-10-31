@@ -1,7 +1,3 @@
-locals {
-  prod = var.environment == "prod"
-}
-
 # Same schema as deployment/local/init-aws.sh; on-demand capacity absorbs on-sale spikes without pre-provisioning
 resource "aws_dynamodb_table" "events" {
   name                        = "${local.name}-events"

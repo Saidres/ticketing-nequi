@@ -140,6 +140,14 @@ class OrderTest {
     }
 
     @Test
+    void shouldRecognizeARetryOfTheSamePurchaseOnly() {
+        assertTrue(pending.isSameRequestAs(Order.pending("O1", "E1", "C1", 2, NOW.plusSeconds(5))));
+        assertFalse(pending.isSameRequestAs(Order.pending("O1", "E2", "C1", 2, NOW)));
+        assertFalse(pending.isSameRequestAs(Order.pending("O1", "E1", "C2", 2, NOW)));
+        assertFalse(pending.isSameRequestAs(Order.pending("O1", "E1", "C1", 3, NOW)));
+    }
+
+    @Test
     void shouldKnowItsOwner() {
         assertTrue(pending.isOwnedBy("C1"));
         assertFalse(pending.isOwnedBy("C2"));

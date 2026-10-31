@@ -1,5 +1,6 @@
 package co.com.nequi.ticketing.dynamodb;
 
+import co.com.nequi.ticketing.model.exception.ConcurrencyConflictException;
 import co.com.nequi.ticketing.model.ticket.Ticket;
 import co.com.nequi.ticketing.model.ticket.TicketStatus;
 import co.com.nequi.ticketing.model.ticket.gateways.TicketRepository;
@@ -8,6 +9,7 @@ import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
+import software.amazon.awssdk.services.dynamodb.model.Put;
 import software.amazon.awssdk.services.dynamodb.model.PutRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest;
 import software.amazon.awssdk.services.dynamodb.model.QueryResponse;
@@ -57,6 +59,18 @@ public class TicketDynamoRepository implements TicketRepository {
                 .buffer(BATCH_SIZE)
                 .flatMap(batch -> writeBatch(Map.of(tables.tickets(), batch), 1), PARALLEL_BATCHES)
                 .then();
+    }
+
+    // At most GrantComplimentaryTicketsUseCase.MAX_PER_REQUEST tickets, under the 100-item transaction limit
+    @Override
+    public Mono<Void> updateAll(List<Ticket> tickets) {
+        List<Put> puts = tickets.stream()
+                .map(ticket -> ConditionalWrites.putIfUnchanged(tables.tickets(), ItemMappers.toItem(ticket),
+                        ticket.version()))
+                .toList();
+        return ConditionalWrites.writeAtomically(client, puts,
+                        () -> new ConcurrencyConflictException("Ticket", tickets.getFirst().id()))
+                .doOnSuccess(committed -> AuditLog.committed(tickets));
     }
 
     // Throttled batches come back as unprocessed items; they are resent with exponential backoff

@@ -3,6 +3,7 @@ package co.com.nequi.ticketing.usecase.placeorder;
 import co.com.nequi.ticketing.model.event.gateways.EventRepository;
 import co.com.nequi.ticketing.model.exception.ConcurrencyConflictException;
 import co.com.nequi.ticketing.model.exception.EventNotFoundException;
+import co.com.nequi.ticketing.model.exception.IdempotencyKeyReusedException;
 import co.com.nequi.ticketing.model.order.Order;
 import co.com.nequi.ticketing.model.order.OrderStatus;
 import co.com.nequi.ticketing.model.order.gateways.OrderQueue;
@@ -32,7 +33,7 @@ public class PlaceOrderUseCase {
     public Mono<Order> execute(PlaceOrderCommand command) {
         return Mono.fromCallable(() -> Order.pending(orderIdFor(command), command.eventId(),
                         command.customerId(), command.quantity(), clock.instant()))
-                .flatMap(candidate -> findExisting(candidate.id())
+                .flatMap(candidate -> findExisting(candidate)
                         .switchIfEmpty(Mono.defer(() -> create(candidate))));
     }
 
@@ -41,13 +42,19 @@ public class PlaceOrderUseCase {
                 .switchIfEmpty(Mono.error(() -> new EventNotFoundException(candidate.eventId())))
                 .then(Mono.defer(() -> orderRepository.create(candidate)))
                 .flatMap(this::enqueue)
-                .onErrorResume(ConcurrencyConflictException.class, duplicate -> findExisting(candidate.id()));
+                .onErrorResume(ConcurrencyConflictException.class, duplicate -> findExisting(candidate));
     }
 
-    // A retry may find the order saved but never enqueued; the consumer tolerates duplicates
-    private Mono<Order> findExisting(String orderId) {
-        return orderRepository.findById(orderId)
-                .flatMap(order -> order.status() == OrderStatus.PENDING ? enqueue(order) : Mono.just(order));
+    // A retry may find the order saved but never enqueued; the consumer tolerates duplicates.
+    // Reusing the key for a different purchase is rejected instead of silently returning the old order
+    private Mono<Order> findExisting(Order candidate) {
+        return orderRepository.findById(candidate.id())
+                .flatMap(order -> {
+                    if (!order.isSameRequestAs(candidate)) {
+                        return Mono.error(new IdempotencyKeyReusedException(order.id()));
+                    }
+                    return order.status() == OrderStatus.PENDING ? enqueue(order) : Mono.just(order);
+                });
     }
 
     private Mono<Order> enqueue(Order order) {

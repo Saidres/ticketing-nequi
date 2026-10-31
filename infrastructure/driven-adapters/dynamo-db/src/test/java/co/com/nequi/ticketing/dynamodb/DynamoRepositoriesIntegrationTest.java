@@ -167,6 +167,19 @@ class DynamoRepositoriesIntegrationTest {
     }
 
     @Test
+    void shouldUpdateTicketsAtomicallyOnlyFromTheVersionThatWasRead() {
+        List<Ticket> inventory = inventory("E1", 2);
+        tickets.saveAll(inventory).block();
+        List<Ticket> complimentary = inventory.stream().map(Ticket::grantComplimentary).toList();
+
+        StepVerifier.create(tickets.updateAll(complimentary)).verifyComplete();
+        StepVerifier.create(tickets.countByEventIdAndStatus("E1", TicketStatus.COMPLIMENTARY)).expectNext(2L).verifyComplete();
+        StepVerifier.create(tickets.updateAll(inventory.stream().map(ticket -> ticket.reserve("O1")).toList()))
+                .expectError(ConcurrencyConflictException.class)
+                .verify();
+    }
+
+    @Test
     void shouldFindOnlyReservationsPastTheirDeadline() {
         Order expired = Order.pending("O1", "E1", "C1", 1, NOW).reserve(NOW.minus(TTL), TTL);
         Order valid = Order.pending("O2", "E1", "C2", 1, NOW).reserve(NOW, TTL);

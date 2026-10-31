@@ -4,6 +4,7 @@ import co.com.nequi.ticketing.model.event.Event;
 import co.com.nequi.ticketing.model.event.gateways.EventRepository;
 import co.com.nequi.ticketing.model.exception.ConcurrencyConflictException;
 import co.com.nequi.ticketing.model.exception.EventNotFoundException;
+import co.com.nequi.ticketing.model.exception.IdempotencyKeyReusedException;
 import co.com.nequi.ticketing.model.order.Order;
 import co.com.nequi.ticketing.model.order.OrderStatus;
 import co.com.nequi.ticketing.model.order.gateways.OrderQueue;
@@ -101,6 +102,16 @@ class PlaceOrderUseCaseTest {
     }
 
     @Test
+    void shouldRejectAKeyReusedForADifferentPurchase() {
+        Order otherEvent = Order.pending("O1", "E2", "C1", 2, NOW);
+        when(orderRepository.findById(anyString())).thenReturn(Mono.just(otherEvent));
+
+        StepVerifier.create(useCase.execute(COMMAND)).expectError(IdempotencyKeyReusedException.class).verify();
+
+        verifyNoInteractions(orderQueue, eventRepository);
+    }
+
+    @Test
     void shouldEnqueueAgainWhenExistingOrderIsStillPending() {
         Order pending = Order.pending("O1", "E1", "C1", 2, NOW);
         when(orderRepository.findById(anyString())).thenReturn(Mono.just(pending));
@@ -185,7 +196,8 @@ class PlaceOrderUseCaseTest {
     }
 
     private String lookedUpOrderIdFor(PlaceOrderCommand command) {
-        Order existing = Order.pending("O1", "E1", "C1", 2, NOW).reserve(NOW, Duration.ofMinutes(10));
+        Order existing = Order.pending("O1", command.eventId(), command.customerId(), command.quantity(), NOW)
+                .reserve(NOW, Duration.ofMinutes(10));
         when(orderRepository.findById(anyString())).thenReturn(Mono.just(existing));
 
         StepVerifier.create(useCase.execute(command)).expectNext(existing).verifyComplete();

@@ -1,6 +1,6 @@
 # Ticketing — Plataforma reactiva de procesamiento de compras de entradas
 
-> CI en cada push (GitHub Actions): compila, corre los 232+ tests (incluidos los de integración con DynamoDB Local) y **falla si algún módulo baja de 90% de cobertura**. También construye la imagen Docker y valida el Terraform.
+> CI en cada push (GitHub Actions): compila, corre los 255 tests (incluidos los de integración con DynamoDB Local) y **falla si algún módulo baja de 90% de cobertura**. También construye la imagen Docker y valida el Terraform.
 
 Backend reactivo para vender entradas de eventos con picos de demanda **sin sobreventa**. La API recibe la compra, la **encola de inmediato** y responde con un número de orden. Un **consumidor asíncrono** reserva las entradas con **escrituras condicionales en DynamoDB**. Las reservas duran **máximo 10 minutos** y un proceso periódico libera las que vencen.
 
@@ -63,6 +63,7 @@ docker compose up -d dynamodb-local localstack init-aws
 | `TABLE_EVENTS`, `TABLE_TICKETS`, `TABLE_ORDERS` | `ticketing-*` | Nombres de tabla configurables (aislamiento de entornos) |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:4200,...` | Orígenes permitidos |
 | `ORDERS_PER_SECOND_PER_CUSTOMER` | `5` | Rate limit de compras por cliente (Resilience4j) |
+| `ADMIN_API_KEY` | `local-admin-key` (solo en docker-compose) | Clave del endpoint de cortesías. **Sin valor, el endpoint queda deshabilitado.** En AWS viene de Secrets Manager |
 
 ---
 
@@ -77,9 +78,10 @@ La colección de Postman está en [`postman/ticketing.postman_collection.json`](
 | `GET` | `/api/v1/events/{eventId}` | Consulta un evento | `200` / `404` |
 | `GET` | `/api/v1/events/{eventId}/availability` | Disponibilidad en tiempo real | `200` |
 | `GET` | `/api/v1/events/{eventId}/availability/stream` | Disponibilidad **en vivo** (Server-Sent Events) | `200` `text/event-stream` |
-| `POST` | `/api/v1/orders` | Compra: **encola** y devuelve el id de la orden | **`202`** |
+| `POST` | `/api/v1/events/{eventId}/complimentary` | **Cortesías** (admin, header `X-Admin-Key`): N entradas pasan a `COMPLIMENTARY`, final y no contable | `200` / `400` / `401` / `404` / `409` |
+| `POST` | `/api/v1/orders` | Compra: **encola** y devuelve el id de la orden | **`202`** / `400` / `404` / `409` / `429` / `503` |
 | `GET` | `/api/v1/orders/{orderId}` | Estado de la orden **y de cada entrada** | `200` / `404` |
-| `POST` | `/api/v1/orders/{orderId}/confirm` | Confirma la compra: las entradas pasan a `SOLD` | `200` / `409` |
+| `POST` | `/api/v1/orders/{orderId}/confirm` | Confirma la compra: devuelve la orden con sus entradas en `SOLD` | `200` / `404` / `409` |
 
 **Headers:** `X-Customer-Id` (cliente) en las operaciones de órdenes, e `Idempotency-Key` en la compra.
 
@@ -123,8 +125,9 @@ Todos responden con `{"status": <código>, "message": "..."}`:
 | Código | Cuándo |
 |---|---|
 | `400` | Datos inválidos, falta un header o el JSON está mal formado |
+| `401` | Falta la clave de administrador o es incorrecta (cortesías) |
 | `404` | El evento o la orden no existe, **o la orden es de otro cliente** (no se revela que existe) |
-| `409` | Transición inválida, reserva vencida o conflicto de concurrencia (se puede reintentar) |
+| `409` | Transición inválida, reserva vencida, no hay entradas suficientes, **clave de idempotencia reutilizada para otra compra**, o conflicto de concurrencia (se puede reintentar) |
 | `415` | Falta `Content-Type: application/json` |
 | `429` | El cliente superó su límite de compras por segundo |
 | `503` | La cola de órdenes no está disponible (circuit breaker abierto): se falla rápido |
@@ -151,6 +154,7 @@ flowchart LR
         CO[ConfirmOrder]
         GO[GetOrder]
         GA[GetAvailability]
+        GC[GrantComplimentaryTickets]
         RE[ReleaseExpiredReservations]
     end
     subgraph DM["Dominio (Java puro + Reactor)"]
@@ -161,7 +165,7 @@ flowchart LR
         DDB["DynamoDB adapter<br/>escrituras condicionales<br/>TransactWriteItems"]
         SND["SQS sender"]
     end
-    API --> CE & QE & PO & CO & GO & GA
+    API --> CE & QE & PO & CO & GO & GA & GC
     LIS --> PR
     SCH --> RE
     UC --> M
@@ -282,7 +286,7 @@ stateDiagram-v2
 | D1 | **Dos máquinas de estado separadas (entrada y orden)** | El requisito 4 usa los estados de la *entrada* para describir la *orden*. Pero una orden puede ser rechazada o expirar, y agrupa varias entradas | La consulta de la orden devuelve **ambos**, así que el requisito se cumple literalmente |
 | D2 | **Una sola fuente de verdad** | La relación orden↔entrada vive solo en `Ticket.orderId`; el vencimiento solo en `Order.reservedUntil`; la disponibilidad se **calcula** contando, no se guarda | Contar es más caro que leer un contador (ver §9) |
 | D3 | **Orden + entradas en una sola transacción** (`TransactWriteItems`) | No existe un estado intermedio como "entradas reservadas con la orden PENDING" | Máximo 100 ítems por transacción (usamos ≤ 7) |
-| D4 | **Compra idempotente**: `orderId = UUID(len:cliente:Idempotency-Key)` | Un doble clic o un reintento de red no crea 2 órdenes. No hace falta una tabla aparte | Reutilizar una clave con otro payload devuelve la orden original |
+| D4 | **Compra idempotente**: `orderId = UUID(len:cliente:Idempotency-Key)` | Un doble clic o un reintento de red no crea 2 órdenes. No hace falta una tabla aparte. Si la clave se reutiliza con **otro evento u otra cantidad**, responde `409` en vez de devolver la orden vieja | — |
 | D5 | **Consumidor idempotente** | SQS entrega *al menos una vez*: si la orden ya no está PENDING, se ignora el mensaje | — |
 | D6 | **Reintentos solo de conflictos** (`Retry.backoff(3, 50ms)` con jitter) | Los errores de negocio (`sealed BusinessException`) siempre fallarían igual. Tras 3 conflictos el mensaje vuelve a SQS y, tras 5 intentos, a la **DLQ** | — |
 | D7 | **Estado `CONFIRMING` en la orden** | La entrada debe pasar por `PENDING_CONFIRMATION`; cada transacción hace un solo cambio de versión. Si se cae a mitad, reintentar confirmar lo completa | Dos escrituras en vez de una |
@@ -291,7 +295,7 @@ stateDiagram-v2
 | D10 | **Cliente DynamoDB directo + mappers explícitos** | La plantilla del Scaffold no soportaba escrituras condicionales, transacciones ni conteos y solo leía una página | Más código de mapeo, pero sin magia |
 | D11 | **Sin Virtual Threads** | WebFlux ya es no bloqueante. Los Virtual Threads resuelven el mismo problema, pero para código bloqueante | — |
 | D12 | **Records en vez de Lombok** | Inmutabilidad nativa de Java y dominio sin dependencias | — |
-| D13 | **Resiliencia en dos niveles** | Los reintentos por concurrencia son **regla de negocio** (Reactor, en el caso de uso). Las fallas de **infraestructura** se manejan con Resilience4j en los bordes: rate limiter por cliente en la compra, circuit breaker en el envío a SQS y timeouts del SDK en DynamoDB y SQS | El rate limiter vive en memoria de cada instancia (ver §9) |
+| D13 | **Resiliencia en dos niveles** | Los reintentos por concurrencia son **regla de negocio** (una sola política, `ConflictRetry`, en los casos de uso). Las fallas de **infraestructura** se manejan con Resilience4j en los bordes: rate limiter por cliente en la compra (en una caché acotada que expira, para que rotar `X-Customer-Id` no agote la memoria), circuit breaker en el envío a SQS y timeouts del SDK | El rate limiter vive en memoria de cada instancia (ver §9) |
 
 ### Java moderno usado
 Records (16) · `switch` exhaustivo (14) · `sealed` (17) · *pattern matching* en `switch` (21) · variables sin nombre `_` (22) · `List.getFirst()` de colecciones secuenciadas (21) · `String.formatted` (15).
@@ -319,7 +323,8 @@ Records (16) · `switch` exhaustivo (14) · `sealed` (17) · *pattern matching* 
 | Ver o confirmar la orden de otro | Se verifica el dueño; se responde `404` (no `403`) para no revelar qué ids existen. Las entradas también validan su orden dueña |
 | Abuso de recursos | **Rate limiter por cliente** en la compra (`429`), máximo **6 entradas por orden** y **100.000** por evento, validación **antes** de leer la base de datos, y el stream SSE se corta a los 10 min |
 | Fuga de información | Los `500` no exponen detalles; headers de seguridad (CSP, HSTS, `nosniff`); CORS restringido a orígenes configurados |
-| Secretos y credenciales | **No hay credenciales en el código ni en el repositorio.** En AWS se usa la cadena por defecto (rol IAM / web identity); en local, credenciales de mentira solo cuando hay un endpoint local |
+| Operaciones de administrador | Las cortesías exigen `X-Admin-Key`, comparada en **tiempo constante** (evita *timing attacks*). Si la clave no está configurada, el endpoint queda **deshabilitado**, no abierto. Máximo 10 por petición |
+| Secretos y credenciales | **No hay credenciales en el código ni en el repositorio.** La clave de admin se inyecta desde **Secrets Manager** en AWS. En AWS se usa la cadena por defecto (rol IAM / web identity); en local, credenciales de mentira solo cuando hay un endpoint local |
 | Contenedor | Imagen de runtime solo con JRE y usuario **no root** |
 
 ---
@@ -331,18 +336,19 @@ Records (16) · `switch` exhaustivo (14) · `sealed` (17) · *pattern matching* 
 ./gradlew :model:pitest :usecase:pitest     # pruebas de mutación del dominio y los casos de uso
 ```
 
-**Cobertura de líneas (JaCoCo): 95% en total** (663 de 698 líneas) · **232 tests** · PIT: 84% de mutantes eliminados.
+**Cobertura de líneas (JaCoCo): 96% en total** (744 de 774 líneas) · **255 tests** · PIT en el dominio y los casos de uso.
 
 | Módulo | Cobertura |
 |---|---|
-| `domain/model` | 96% |
+| `domain/model` | 92% |
 | `domain/usecase` | **100%** |
-| `dynamo-db` | 92% |
+| `dynamo-db` | 94% |
 | `sqs-sender` | 100% |
-| `sqs-listener` | 85% |
+| `sqs-listener` | 100% |
 | `reactive-web` | 99% |
 | `scheduler` | 95% |
-| `app-service` | 0% (solo `main` y la configuración de beans) |
+| `helpers/metrics` | 100% |
+| `app-service` | 0% (solo `main` y la configuración de beans; fuera del gate) |
 
 **Quality gate:** `./gradlew check` aplica `jacocoTestCoverageVerification` con **mínimo 90% de líneas por módulo** (excepto `app-service`) y hace fallar el build si no se cumple. El pipeline [`ci.yml`](.github/workflows/ci.yml) lo ejecuta en cada push y en cada pull request.
 
@@ -368,8 +374,10 @@ Records (16) · `switch` exhaustivo (14) · `sealed` (17) · *pattern matching* 
 | Índice de vencimientos con una sola partición `RESERVED` | Particionar por evento o por bucket de tiempo para evitar una partición caliente |
 | Crear un evento de 100.000 entradas son ~4.000 `BatchWriteItem` en la petición | Crear el inventario de forma asíncrona (cola), con estado "publicando" |
 | Rate limiter en memoria por instancia | Rate limiting distribuido (API Gateway usage plans / WAF o Redis) |
-| Métricas en `/actuator/prometheus` | Dashboards y alarmas (CloudWatch / Grafana), trazas distribuidas (OpenTelemetry) y alarma sobre mensajes en la DLQ |
-| La cortesía (`COMPLIMENTARY`) existe en el dominio, pero no tiene endpoint | Un endpoint administrativo protegido para asignar cortesías |
+| Métricas en `/actuator/prometheus` y alarmas de CloudWatch (DLQ, cola atrasada, 5xx, throttling) en Terraform | Dashboards (CloudWatch / Grafana) y trazas distribuidas (OpenTelemetry / X-Ray) |
+| Cortesías protegidas por una clave compartida de admin, y sin clave de idempotencia (un reintento del admin otorga N más) | Roles con un IdP (JWT con scope `admin`), `Idempotency-Key` también en las cortesías y auditoría de quién otorgó cada una |
+| Cada conexión SSE consulta la disponibilidad por su cuenta (cortada a los 10 min) | Un publicador compartido por evento (`share()`) y un límite de conexiones por cliente |
+| No se valida que la fecha del evento sea futura | Rechazar eventos en el pasado y cerrar la venta cuando el evento ya ocurrió |
 
 ---
 
@@ -400,7 +408,7 @@ terraform apply -var-file=environments/dev.tfvars
 |---|---|
 | `network.tf` | VPC, subredes públicas y privadas en 2 AZ, NAT, VPC endpoints y security groups |
 | `data.tf` | Las 3 tablas DynamoDB con sus índices, y la cola SQS + DLQ |
-| `iam.tf` | Rol de ejecución y rol de la app con mínimo privilegio |
+| `iam.tf` | Rol de ejecución, rol de la app con mínimo privilegio, y el secreto de la clave de admin en Secrets Manager |
 | `compute.tf` | ECR, ECS Fargate, ALB con HTTPS (TLS 1.3) y autoescalado |
 | `observability.tf` | Alarmas y notificación por SNS |
 | `environments/*.tfvars` / `*.backend.hcl` | Diferencias entre `dev` y `prod` y su estado remoto separado |

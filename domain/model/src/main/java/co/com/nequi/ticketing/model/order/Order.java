@@ -82,6 +82,11 @@ public record Order(String id, String eventId, String customerId, int quantity, 
         return tickets;
     }
 
+    // Same customer, event and quantity: a retry of this purchase rather than a different one
+    public boolean isSameRequestAs(Order other) {
+        return customerId.equals(other.customerId) && eventId.equals(other.eventId) && quantity == other.quantity;
+    }
+
     public boolean isOwnedBy(String customerId) {
         return this.customerId.equals(customerId);
     }

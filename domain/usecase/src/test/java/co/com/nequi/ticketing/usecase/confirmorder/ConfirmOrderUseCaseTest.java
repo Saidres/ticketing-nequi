@@ -76,7 +76,7 @@ class ConfirmOrderUseCaseTest {
         when(orderTicketsTransaction.commit(any(), anyList())).thenReturn(Mono.empty());
 
         StepVerifier.create(useCase.execute("O1", "C1"))
-                .assertNext(order -> assertEquals(OrderStatus.CONFIRMED, order.status()))
+                .assertNext(details -> assertEquals(OrderStatus.CONFIRMED, details.order().status()))
                 .verifyComplete();
 
         verify(ticketRepository, times(1)).findByOrderId("O1");
@@ -96,7 +96,7 @@ class ConfirmOrderUseCaseTest {
         when(orderTicketsTransaction.commit(any(), anyList())).thenReturn(Mono.empty());
 
         StepVerifier.create(useCase.execute("O1", "C1"))
-                .assertNext(order -> assertEquals(OrderStatus.CONFIRMED, order.status()))
+                .assertNext(details -> assertEquals(OrderStatus.CONFIRMED, details.order().status()))
                 .verifyComplete();
 
         verify(orderTicketsTransaction, times(1)).commit(any(), anyList());
@@ -105,13 +105,20 @@ class ConfirmOrderUseCaseTest {
     @Test
     void shouldReturnAlreadyConfirmedOrderWithoutWriting() {
         Order confirmed = RESERVED.startConfirmation(NOW).confirm();
+        List<Ticket> sold = RESERVED_TICKETS.stream()
+                .map(ticket -> ticket.startConfirmation("O1").sell("O1"))
+                .toList();
         when(orderRepository.findById("O1")).thenReturn(Mono.just(confirmed));
+        when(ticketRepository.findByOrderId("O1")).thenReturn(Flux.fromIterable(sold));
 
         StepVerifier.create(useCase.execute("O1", "C1"))
-                .expectNext(confirmed)
+                .assertNext(details -> {
+                    assertEquals(confirmed, details.order());
+                    assertAllTickets(details.tickets(), TicketStatus.SOLD);
+                })
                 .verifyComplete();
 
-        verifyNoInteractions(ticketRepository, orderTicketsTransaction);
+        verifyNoInteractions(orderTicketsTransaction);
     }
 
     @Test

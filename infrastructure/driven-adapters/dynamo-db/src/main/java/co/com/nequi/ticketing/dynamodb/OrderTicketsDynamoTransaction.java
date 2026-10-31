@@ -7,8 +7,7 @@ import co.com.nequi.ticketing.model.ticket.Ticket;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Mono;
 import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
-import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
-import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
+import software.amazon.awssdk.services.dynamodb.model.Put;
 
 import java.util.List;
 import java.util.stream.Stream;
@@ -27,18 +26,13 @@ public class OrderTicketsDynamoTransaction implements OrderTicketsTransaction {
     // At most 1 order + 6 tickets, well under the 100-item TransactWriteItems limit
     @Override
     public Mono<Void> commit(Order order, List<Ticket> tickets) {
-        List<TransactWriteItem> writes = Stream.concat(
+        List<Put> puts = Stream.concat(
                         Stream.of(ConditionalWrites.putIfUnchanged(tables.orders(), ItemMappers.toItem(order),
                                 order.version())),
                         tickets.stream().map(ticket -> ConditionalWrites.putIfUnchanged(tables.tickets(),
                                 ItemMappers.toItem(ticket), ticket.version())))
-                .map(put -> TransactWriteItem.builder().put(put).build())
                 .toList();
-        return Mono.fromFuture(() -> client.transactWriteItems(request -> request.transactItems(writes)))
-                .doOnSuccess(committed -> AuditLog.committed(order, tickets))
-                .onErrorMap(error -> error instanceof TransactionCanceledException canceled
-                                && ConditionalWrites.isConflict(canceled),
-                        conflict -> new ConcurrencyConflictException("Order", order.id()))
-                .then();
+        return ConditionalWrites.writeAtomically(client, puts, () -> new ConcurrencyConflictException("Order", order.id()))
+                .doOnSuccess(committed -> AuditLog.committed(order, tickets));
     }
 }

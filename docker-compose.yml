@@ -42,5 +42,7 @@ services:
       DYNAMODB_ENDPOINT: http://dynamodb-local:8000
       SQS_ENDPOINT: http://localstack:4566
       ORDERS_QUEUE_URL: http://localstack:4566/000000000000/ticketing-orders
+      # Local-only admin key for the complimentary endpoint; in AWS it comes from Secrets Manager
+      ADMIN_API_KEY: local-admin-key
     ports:
       - "8080:8080"

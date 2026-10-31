@@ -5,6 +5,7 @@ import co.com.nequi.ticketing.model.order.Order;
 import co.com.nequi.ticketing.model.order.gateways.OrderRepository;
 import co.com.nequi.ticketing.model.ticket.Ticket;
 import co.com.nequi.ticketing.model.ticket.gateways.TicketRepository;
+import co.com.nequi.ticketing.usecase.shared.OrderDetails;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;

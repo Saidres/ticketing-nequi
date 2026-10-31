@@ -44,7 +44,7 @@ public class DynamoDBConfig {
     }
 
     // An explicit endpoint means DynamoDB Local, which accepts any credentials; AWS uses the default chain (IAM role)
-    static AwsCredentialsProvider credentials(String endpoint) {
+    private static AwsCredentialsProvider credentials(String endpoint) {
         return endpoint != null
                 ? StaticCredentialsProvider.create(AwsBasicCredentials.create("local", "local"))
                 : DefaultCredentialsProvider.builder().build();

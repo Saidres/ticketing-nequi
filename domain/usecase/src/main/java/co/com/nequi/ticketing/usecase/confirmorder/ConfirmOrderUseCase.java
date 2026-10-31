@@ -7,6 +7,7 @@ import co.com.nequi.ticketing.model.order.gateways.OrderTicketsTransaction;
 import co.com.nequi.ticketing.model.ticket.Ticket;
 import co.com.nequi.ticketing.model.ticket.TicketStatus;
 import co.com.nequi.ticketing.model.ticket.gateways.TicketRepository;
+import co.com.nequi.ticketing.usecase.shared.OrderDetails;
 import reactor.core.publisher.Mono;
 
 import java.time.Clock;
@@ -28,7 +29,7 @@ public class ConfirmOrderUseCase {
         this.clock = clock;
     }
 
-    public Mono<Order> execute(String orderId, String customerId) {
+    public Mono<OrderDetails> execute(String orderId, String customerId) {
         return orderRepository.findById(orderId)
                 .filter(order -> order.isOwnedBy(customerId))
                 .switchIfEmpty(Mono.error(() -> new OrderNotFoundException(orderId)))
@@ -36,27 +37,26 @@ public class ConfirmOrderUseCase {
     }
 
     // Idempotent and resumable: a retry after a crash between the two commits finishes the sale
-    private Mono<Order> advance(Order order) {
+    private Mono<OrderDetails> advance(Order order) {
         return switch (order.status()) {
-            case CONFIRMED -> Mono.just(order);
+            case CONFIRMED -> ownTickets(order, TicketStatus.SOLD).map(tickets -> new OrderDetails(order, tickets));
             case CONFIRMING -> ownTickets(order, TicketStatus.PENDING_CONFIRMATION)
-                    .flatMap(tickets -> sell(new Committed(order, tickets)));
+                    .flatMap(tickets -> sell(new OrderDetails(order, tickets)));
             default -> startConfirmation(order).flatMap(this::sell);
         };
     }
 
-    private Mono<Committed> startConfirmation(Order reserved) {
+    private Mono<OrderDetails> startConfirmation(Order reserved) {
         return Mono.fromCallable(() -> reserved.startConfirmation(clock.instant()))
                 .flatMap(confirming -> ownTickets(reserved, TicketStatus.RESERVED)
                         .flatMap(tickets -> commit(confirming,
                                 transition(tickets, ticket -> ticket.startConfirmation(reserved.id())))));
     }
 
-    private Mono<Order> sell(Committed confirming) {
+    private Mono<OrderDetails> sell(OrderDetails confirming) {
         return Mono.fromCallable(() -> confirming.order().confirm())
                 .flatMap(confirmed -> commit(confirmed,
-                        transition(confirming.tickets(), ticket -> ticket.sell(confirmed.id()))))
-                .map(Committed::order);
+                        transition(confirming.tickets(), ticket -> ticket.sell(confirmed.id()))));
     }
 
     private Mono<List<Ticket>> ownTickets(Order order, TicketStatus expected) {
@@ -65,14 +65,11 @@ public class ConfirmOrderUseCase {
                 .map(tickets -> order.requireOwnTickets(tickets, expected));
     }
 
-    private Mono<Committed> commit(Order order, List<Ticket> tickets) {
-        return orderTicketsTransaction.commit(order, tickets).thenReturn(new Committed(order, tickets));
+    private Mono<OrderDetails> commit(Order order, List<Ticket> tickets) {
+        return orderTicketsTransaction.commit(order, tickets).thenReturn(new OrderDetails(order, tickets));
     }
 
     private static List<Ticket> transition(List<Ticket> tickets, UnaryOperator<Ticket> change) {
         return tickets.stream().map(change).toList();
-    }
-
-    private record Committed(Order order, List<Ticket> tickets) {
     }
 }

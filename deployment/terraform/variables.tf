@@ -68,6 +68,11 @@ variable "reservation_ttl" {
   default = "10m"
 }
 
+variable "cors_allowed_origins" {
+  description = "Comma-separated web origins allowed to call the API"
+  type        = string
+}
+
 variable "acm_certificate_arn" {
   description = "TLS certificate for the public HTTPS listener"
   type        = string

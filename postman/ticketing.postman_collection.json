@@ -5,10 +5,26 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:8080/api/v1" },
-    { "key": "customerId", "value": "ana" },
-    { "key": "eventId", "value": "" },
-    { "key": "orderId", "value": "" }
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080/api/v1"
+    },
+    {
+      "key": "customerId",
+      "value": "ana"
+    },
+    {
+      "key": "eventId",
+      "value": ""
+    },
+    {
+      "key": "orderId",
+      "value": ""
+    },
+    {
+      "key": "adminKey",
+      "value": "local-admin-key"
+    }
   ],
   "item": [
     {
@@ -16,42 +32,106 @@
       "item": [
         {
           "name": "Create event",
-          "event": [{
-            "listen": "test",
-            "script": { "exec": [
-              "pm.test('201 Created', () => pm.response.to.have.status(201));",
-              "pm.collectionVariables.set('eventId', pm.response.json().eventId);"
-            ] }
-          }],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('eventId', pm.response.json().eventId);"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "url": "{{baseUrl}}/events",
-            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Rock Fest\",\n  \"date\": \"2026-12-01T20:00:00Z\",\n  \"venue\": \"Movistar Arena\",\n  \"totalCapacity\": 10\n}" }
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Rock Fest\",\n  \"date\": \"2026-12-01T20:00:00Z\",\n  \"venue\": \"Movistar Arena\",\n  \"totalCapacity\": 10\n}"
+            }
           }
         },
         {
           "name": "List events",
-          "request": { "method": "GET", "url": "{{baseUrl}}/events" }
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/events"
+          }
         },
         {
           "name": "Get event",
-          "request": { "method": "GET", "url": "{{baseUrl}}/events/{{eventId}}" }
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/events/{{eventId}}"
+          }
         },
         {
           "name": "Availability",
-          "event": [{
-            "listen": "test",
-            "script": { "exec": ["pm.test('200 OK', () => pm.response.to.have.status(200));"] }
-          }],
-          "request": { "method": "GET", "url": "{{baseUrl}}/events/{{eventId}}/availability" }
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/events/{{eventId}}/availability"
+          }
         },
         {
           "name": "Availability stream (SSE, open in a browser or curl -N)",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "text/event-stream" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
             "url": "{{baseUrl}}/events/{{eventId}}/availability/stream"
+          }
+        },
+        {
+          "name": "Grant complimentary tickets (admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('All COMPLIMENTARY', () => pm.response.json().forEach(t => pm.expect(t.status).to.eql('COMPLIMENTARY')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Admin-Key",
+                "value": "{{adminKey}}"
+              }
+            ],
+            "url": "{{baseUrl}}/events/{{eventId}}/complimentary",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 1\n}"
+            }
           }
         }
       ]
@@ -64,86 +144,149 @@
           "event": [
             {
               "listen": "prerequest",
-              "script": { "exec": ["pm.collectionVariables.set('idempotencyKey', pm.variables.replaceIn('{{$guid}}'));"] }
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('idempotencyKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
             },
             {
               "listen": "test",
-              "script": { "exec": [
-                "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
-                "pm.test('Order starts PENDING', () => pm.expect(pm.response.json().status).to.eql('PENDING'));",
-                "pm.collectionVariables.set('orderId', pm.response.json().orderId);"
-              ] }
+              "script": {
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('Order starts PENDING', () => pm.expect(pm.response.json().status).to.eql('PENDING'));",
+                  "pm.collectionVariables.set('orderId', pm.response.json().orderId);"
+                ]
+              }
             }
           ],
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-Customer-Id", "value": "{{customerId}}" },
-              { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}"
+              }
             ],
             "url": "{{baseUrl}}/orders",
-            "body": { "mode": "raw", "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"quantity\": 2\n}" }
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"quantity\": 2\n}"
+            }
           }
         },
         {
           "name": "Repeat the same purchase (idempotent: same order)",
-          "event": [{
-            "listen": "test",
-            "script": { "exec": [
-              "pm.test('Same order id', () => pm.expect(pm.response.json().orderId).to.eql(pm.collectionVariables.get('orderId')));"
-            ] }
-          }],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Same order id', () => pm.expect(pm.response.json().orderId).to.eql(pm.collectionVariables.get('orderId')));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-Customer-Id", "value": "{{customerId}}" },
-              { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}"
+              }
             ],
             "url": "{{baseUrl}}/orders",
-            "body": { "mode": "raw", "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"quantity\": 2\n}" }
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"quantity\": 2\n}"
+            }
           }
         },
         {
           "name": "Get order (RESERVED after processing)",
-          "event": [{
-            "listen": "test",
-            "script": { "exec": [
-              "pm.test('200 OK', () => pm.response.to.have.status(200));",
-              "pm.test('Each ticket has a status', () => pm.response.json().tickets.forEach(t => pm.expect(t.status).to.be.a('string')));"
-            ] }
-          }],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Each ticket has a status', () => pm.response.json().tickets.forEach(t => pm.expect(t.status).to.be.a('string')));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "GET",
-            "header": [{ "key": "X-Customer-Id", "value": "{{customerId}}" }],
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              }
+            ],
             "url": "{{baseUrl}}/orders/{{orderId}}"
           }
         },
         {
           "name": "Get order as another customer (404)",
-          "event": [{
-            "listen": "test",
-            "script": { "exec": ["pm.test('404 Not Found', () => pm.response.to.have.status(404));"] }
-          }],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "GET",
-            "header": [{ "key": "X-Customer-Id", "value": "intruder" }],
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "intruder"
+              }
+            ],
             "url": "{{baseUrl}}/orders/{{orderId}}"
           }
         },
         {
           "name": "Confirm order (tickets SOLD)",
-          "event": [{
-            "listen": "test",
-            "script": { "exec": [
-              "pm.test('200 OK', () => pm.response.to.have.status(200));",
-              "pm.test('Order CONFIRMED', () => pm.expect(pm.response.json().status).to.eql('CONFIRMED'));"
-            ] }
-          }],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Order CONFIRMED', () => pm.expect(pm.response.json().status).to.eql('CONFIRMED'));"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "X-Customer-Id", "value": "{{customerId}}" }],
+            "header": [
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              }
+            ],
             "url": "{{baseUrl}}/orders/{{orderId}}/confirm"
           }
         }
@@ -157,12 +300,24 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-Customer-Id", "value": "{{customerId}}" },
-              { "key": "Idempotency-Key", "value": "too-many-1" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "too-many-1"
+              }
             ],
             "url": "{{baseUrl}}/orders",
-            "body": { "mode": "raw", "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"quantity\": 7\n}" }
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"quantity\": 7\n}"
+            }
           }
         },
         {
@@ -170,16 +325,45 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-Customer-Id", "value": "{{customerId}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Customer-Id",
+                "value": "{{customerId}}"
+              }
             ],
             "url": "{{baseUrl}}/orders",
-            "body": { "mode": "raw", "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"quantity\": 1\n}" }
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"quantity\": 1\n}"
+            }
           }
         },
         {
           "name": "Unknown event (404)",
-          "request": { "method": "GET", "url": "{{baseUrl}}/events/does-not-exist" }
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/events/does-not-exist"
+          }
+        },
+        {
+          "name": "Complimentary without admin key (401)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/events/{{eventId}}/complimentary",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 1\n}"
+            }
+          }
         }
       ]
     }

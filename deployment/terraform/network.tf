@@ -1,6 +1,7 @@
 locals {
   name      = "${var.project}-${var.environment}"
   nat_count = var.single_nat_gateway ? 1 : length(var.availability_zones)
+  prod      = var.environment == "prod"
 }
 
 resource "aws_vpc" "main" {

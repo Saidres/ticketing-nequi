@@ -1,12 +1,18 @@
 package co.com.nequi.ticketing.dynamodb;
 
+import co.com.nequi.ticketing.model.exception.ConcurrencyConflictException;
+import reactor.core.publisher.Mono;
+import software.amazon.awssdk.services.dynamodb.DynamoDbAsyncClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.CancellationReason;
 import software.amazon.awssdk.services.dynamodb.model.Put;
+import software.amazon.awssdk.services.dynamodb.model.TransactWriteItem;
 import software.amazon.awssdk.services.dynamodb.model.TransactionCanceledException;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import static co.com.nequi.ticketing.dynamodb.ItemMappers.VERSION;
 
@@ -35,7 +41,17 @@ final class ConditionalWrites {
                 .build();
     }
 
-    static boolean isConflict(TransactionCanceledException error) {
+    // One all-or-nothing TransactWriteItems; a lost condition becomes a retryable ConcurrencyConflictException
+    static Mono<Void> writeAtomically(DynamoDbAsyncClient client, List<Put> puts,
+                                      Supplier<ConcurrencyConflictException> onConflict) {
+        List<TransactWriteItem> writes = puts.stream().map(put -> TransactWriteItem.builder().put(put).build()).toList();
+        return Mono.fromFuture(() -> client.transactWriteItems(request -> request.transactItems(writes)))
+                .onErrorMap(error -> error instanceof TransactionCanceledException canceled && isConflict(canceled),
+                        conflict -> onConflict.get())
+                .then();
+    }
+
+    private static boolean isConflict(TransactionCanceledException error) {
         return error.cancellationReasons().stream()
                 .map(CancellationReason::code)
                 .anyMatch(CONFLICT_REASONS::contains);

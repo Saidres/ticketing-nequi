@@ -13,12 +13,14 @@ import static org.springframework.web.reactive.function.server.RouterFunctions.r
 public class RouterRest {
 
     @Bean
-    public RouterFunction<ServerResponse> routerFunction(EventHandler events, OrderHandler orders) {
+    public RouterFunction<ServerResponse> routerFunction(EventHandler events, OrderHandler orders,
+                                                         ComplimentaryHandler complimentary) {
         return route(POST("/api/v1/events"), events::createEvent)
                 .andRoute(GET("/api/v1/events"), events::listEvents)
                 .andRoute(GET("/api/v1/events/{eventId}"), events::getEvent)
                 .andRoute(GET("/api/v1/events/{eventId}/availability"), events::getAvailability)
                 .andRoute(GET("/api/v1/events/{eventId}/availability/stream"), events::streamAvailability)
+                .andRoute(POST("/api/v1/events/{eventId}/complimentary"), complimentary::grant)
                 .andRoute(POST("/api/v1/orders"), orders::placeOrder)
                 .andRoute(GET("/api/v1/orders/{orderId}"), orders::getOrder)
                 .andRoute(POST("/api/v1/orders/{orderId}/confirm"), orders::confirmOrder);

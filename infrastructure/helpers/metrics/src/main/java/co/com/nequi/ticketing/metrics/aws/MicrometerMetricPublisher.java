@@ -39,7 +39,7 @@ public class MicrometerMetricPublisher implements MetricPublisher {
 
     @Override
     public void close() {
-
+        service.shutdown();
     }
 
     private List<Tag> buildTags(MetricCollection metricCollection) {

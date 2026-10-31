@@ -1,4 +1,4 @@
-package co.com.nequi.ticketing.usecase.getorder;
+package co.com.nequi.ticketing.usecase.shared;
 
 import co.com.nequi.ticketing.model.order.Order;
 import co.com.nequi.ticketing.model.ticket.Ticket;

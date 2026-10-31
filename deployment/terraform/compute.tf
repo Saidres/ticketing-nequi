@@ -44,6 +44,11 @@ resource "aws_ecs_task_definition" "app" {
       { name = "TABLE_ORDERS", value = aws_dynamodb_table.orders.name },
       { name = "ORDERS_QUEUE_URL", value = aws_sqs_queue.orders.url },
       { name = "RESERVATION_TTL", value = var.reservation_ttl },
+      { name = "CORS_ALLOWED_ORIGINS", value = var.cors_allowed_origins },
+    ]
+    # Injected by ECS from Secrets Manager at start-up: never stored in the task definition or the image
+    secrets = [
+      { name = "ADMIN_API_KEY", valueFrom = aws_secretsmanager_secret.admin_api_key.arn },
     ]
     logConfiguration = {
       logDriver = "awslogs"

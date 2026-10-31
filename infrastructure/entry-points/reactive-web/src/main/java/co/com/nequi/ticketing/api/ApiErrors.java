@@ -4,7 +4,9 @@ import co.com.nequi.ticketing.api.dto.ErrorResponse;
 import co.com.nequi.ticketing.model.exception.BusinessException;
 import co.com.nequi.ticketing.model.exception.ConcurrencyConflictException;
 import co.com.nequi.ticketing.model.exception.EventNotFoundException;
+import co.com.nequi.ticketing.model.exception.IdempotencyKeyReusedException;
 import co.com.nequi.ticketing.model.exception.InvalidStateTransitionException;
+import co.com.nequi.ticketing.model.exception.NotEnoughTicketsException;
 import co.com.nequi.ticketing.model.exception.OrderNotFoundException;
 import co.com.nequi.ticketing.model.exception.ReservationExpiredException;
 import co.com.nequi.ticketing.model.exception.TicketNotOwnedException;
@@ -27,7 +29,11 @@ final class ApiErrors {
     // Unexpected errors never leak internal details to the client
     static Mono<ServerResponse> toResponse(Throwable error) {
         HttpStatus status = statusOf(error);
-        String message = status.is5xxServerError() ? "Unexpected error" : error.getMessage();
+        String message = switch (error) {
+            case Throwable _ when status.is5xxServerError() -> "Unexpected error";
+            case ResponseStatusException web -> web.getReason();
+            default -> error.getMessage();
+        };
         if (status.is5xxServerError()) {
             log.error("Unexpected error handling the request", error);
         }
@@ -50,8 +56,8 @@ final class ApiErrors {
     private static HttpStatus statusOf(BusinessException error) {
         return switch (error) {
             case EventNotFoundException _, OrderNotFoundException _ -> HttpStatus.NOT_FOUND;
-            case InvalidStateTransitionException _, TicketNotOwnedException _, ReservationExpiredException _ ->
-                    HttpStatus.CONFLICT;
+            case InvalidStateTransitionException _, TicketNotOwnedException _, ReservationExpiredException _,
+                 NotEnoughTicketsException _, IdempotencyKeyReusedException _ -> HttpStatus.CONFLICT;
         };
     }
 }

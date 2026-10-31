@@ -13,7 +13,7 @@ class ConfigTest {
 
     private final WebTestClient client = WebTestClient
             .bindToRouterFunction(RouterFunctions.route(GET("/ping"), request -> ServerResponse.ok().build()))
-            .webFilter(new SecurityHeadersConfig(), new CorsConfig().corsWebFilter(List.of("http://localhost:4200")))
+            .webFilter(new SecurityHeadersFilter(), new CorsConfig().corsWebFilter(List.of("http://localhost:4200")))
             .configureClient()
             .baseUrl("http://api.ticketing.test")
             .build();

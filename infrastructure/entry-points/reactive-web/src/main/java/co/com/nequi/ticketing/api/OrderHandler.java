@@ -1,12 +1,11 @@
 package co.com.nequi.ticketing.api;
 
+import co.com.nequi.ticketing.api.config.CustomerRateLimiters;
 import co.com.nequi.ticketing.api.dto.OrderResponse;
 import co.com.nequi.ticketing.api.dto.PlaceOrderRequest;
 import co.com.nequi.ticketing.usecase.confirmorder.ConfirmOrderUseCase;
 import co.com.nequi.ticketing.usecase.getorder.GetOrderUseCase;
 import co.com.nequi.ticketing.usecase.placeorder.PlaceOrderUseCase;
-import io.github.resilience4j.ratelimiter.RateLimiter;
-import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
 import io.github.resilience4j.reactor.ratelimiter.operator.RateLimiterOperator;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.server.ServerRequest;
@@ -24,10 +23,10 @@ public class OrderHandler {
     private final PlaceOrderUseCase placeOrderUseCase;
     private final GetOrderUseCase getOrderUseCase;
     private final ConfirmOrderUseCase confirmOrderUseCase;
-    private final RateLimiterRegistry rateLimiters;
+    private final CustomerRateLimiters rateLimiters;
 
     public OrderHandler(PlaceOrderUseCase placeOrderUseCase, GetOrderUseCase getOrderUseCase,
-                        ConfirmOrderUseCase confirmOrderUseCase, RateLimiterRegistry rateLimiters) {
+                        ConfirmOrderUseCase confirmOrderUseCase, CustomerRateLimiters rateLimiters) {
         this.placeOrderUseCase = placeOrderUseCase;
         this.getOrderUseCase = getOrderUseCase;
         this.confirmOrderUseCase = confirmOrderUseCase;
@@ -41,16 +40,11 @@ public class OrderHandler {
                 .flatMap(headers -> Requests.requiredBody(request, PlaceOrderRequest.class)
                         .map(body -> body.toCommand(headers.getT1(), headers.getT2())))
                 .flatMap(command -> placeOrderUseCase.execute(command)
-                        .transformDeferred(RateLimiterOperator.of(rateLimiterFor(command.customerId()))))
+                        .transformDeferred(RateLimiterOperator.of(rateLimiters.forCustomer(command.customerId()))))
                 .flatMap(order -> ServerResponse.accepted()
                         .location(URI.create("/api/v1/orders/" + order.id()))
                         .bodyValue(OrderResponse.of(order, List.of())))
                 .onErrorResume(ApiErrors::toResponse);
-    }
-
-    // One limiter per customer, so a single abusive client cannot starve the rest
-    private RateLimiter rateLimiterFor(String customerId) {
-        return rateLimiters.rateLimiter("place-order:" + customerId);
     }
 
     public Mono<ServerResponse> getOrder(ServerRequest request) {
@@ -63,7 +57,7 @@ public class OrderHandler {
     public Mono<ServerResponse> confirmOrder(ServerRequest request) {
         return Requests.customerId(request)
                 .flatMap(customerId -> confirmOrderUseCase.execute(request.pathVariable("orderId"), customerId))
-                .flatMap(order -> ServerResponse.ok().bodyValue(OrderResponse.of(order, List.of())))
+                .flatMap(details -> ServerResponse.ok().bodyValue(OrderResponse.of(details.order(), details.tickets())))
                 .onErrorResume(ApiErrors::toResponse);
     }
 }

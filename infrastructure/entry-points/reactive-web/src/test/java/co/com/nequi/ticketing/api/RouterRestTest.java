@@ -1,10 +1,12 @@
 package co.com.nequi.ticketing.api;
 
-import co.com.nequi.ticketing.api.config.RateLimitConfig;
+import co.com.nequi.ticketing.api.config.AdminKey;
+import co.com.nequi.ticketing.api.config.CustomerRateLimiters;
 import co.com.nequi.ticketing.model.event.Event;
 import co.com.nequi.ticketing.model.exception.ConcurrencyConflictException;
 import co.com.nequi.ticketing.model.exception.EventNotFoundException;
 import co.com.nequi.ticketing.model.exception.InvalidStateTransitionException;
+import co.com.nequi.ticketing.model.exception.NotEnoughTicketsException;
 import co.com.nequi.ticketing.model.exception.OrderNotFoundException;
 import co.com.nequi.ticketing.model.exception.ReservationExpiredException;
 import co.com.nequi.ticketing.model.exception.TicketNotOwnedException;
@@ -16,7 +18,8 @@ import co.com.nequi.ticketing.usecase.createevent.CreateEventUseCase;
 import co.com.nequi.ticketing.usecase.getavailability.Availability;
 import co.com.nequi.ticketing.usecase.getavailability.GetAvailabilityUseCase;
 import co.com.nequi.ticketing.usecase.getorder.GetOrderUseCase;
-import co.com.nequi.ticketing.usecase.getorder.OrderDetails;
+import co.com.nequi.ticketing.usecase.grantcomplimentary.GrantComplimentaryTicketsUseCase;
+import co.com.nequi.ticketing.usecase.shared.OrderDetails;
 import co.com.nequi.ticketing.usecase.placeorder.PlaceOrderCommand;
 import co.com.nequi.ticketing.usecase.placeorder.PlaceOrderUseCase;
 import co.com.nequi.ticketing.usecase.queryevents.QueryEventsUseCase;
@@ -62,6 +65,8 @@ class RouterRestTest {
     private GetOrderUseCase getOrderUseCase;
     @Mock
     private ConfirmOrderUseCase confirmOrderUseCase;
+    @Mock
+    private GrantComplimentaryTicketsUseCase grantComplimentaryTicketsUseCase;
 
     private WebTestClient client;
 
@@ -69,8 +74,11 @@ class RouterRestTest {
     void setUp() {
         EventHandler events = new EventHandler(createEventUseCase, queryEventsUseCase, getAvailabilityUseCase);
         OrderHandler orders = new OrderHandler(placeOrderUseCase, getOrderUseCase, confirmOrderUseCase,
-                new RateLimitConfig().rateLimiterRegistry(2));
-        client = WebTestClient.bindToRouterFunction(new RouterRest().routerFunction(events, orders)).build();
+                new CustomerRateLimiters(2));
+        ComplimentaryHandler complimentary = new ComplimentaryHandler(grantComplimentaryTicketsUseCase,
+                new AdminKey("admin-secret"));
+        client = WebTestClient.bindToRouterFunction(new RouterRest().routerFunction(events, orders, complimentary))
+                .build();
     }
 
     @Test
@@ -265,11 +273,14 @@ class RouterRestTest {
     @Test
     void shouldConfirmAnOrder() {
         Order confirmed = PENDING.reserve(NOW, Duration.ofMinutes(10)).startConfirmation(NOW).confirm();
-        when(confirmOrderUseCase.execute("O1", "C1")).thenReturn(Mono.just(confirmed));
+        Ticket sold = Ticket.available("E1-000001", "E1").reserve("O1").startConfirmation("O1").sell("O1");
+        when(confirmOrderUseCase.execute("O1", "C1")).thenReturn(Mono.just(new OrderDetails(confirmed, List.of(sold))));
 
         client.post().uri("/api/v1/orders/O1/confirm").header(Requests.CUSTOMER_ID, "C1").exchange()
                 .expectStatus().isOk()
-                .expectBody().jsonPath("$.status").isEqualTo("CONFIRMED");
+                .expectBody()
+                .jsonPath("$.status").isEqualTo("CONFIRMED")
+                .jsonPath("$.tickets[0].status").isEqualTo("SOLD");
     }
 
     @Test
@@ -288,6 +299,41 @@ class RouterRestTest {
                 .expectStatus().isEqualTo(409);
         client.post().uri("/api/v1/orders/O4/confirm").header(Requests.CUSTOMER_ID, "C1").exchange()
                 .expectStatus().isEqualTo(409);
+    }
+
+    @Test
+    void shouldGrantComplimentaryTicketsToAnAdmin() {
+        Ticket complimentary = Ticket.available("E1-000001", "E1").grantComplimentary();
+        when(grantComplimentaryTicketsUseCase.execute("E1", 1)).thenReturn(Mono.just(List.of(complimentary)));
+
+        grantComplimentary("admin-secret", 1).expectStatus().isOk()
+                .expectBody().jsonPath("$[0].status").isEqualTo("COMPLIMENTARY");
+    }
+
+    @Test
+    void shouldRejectComplimentaryTicketsWithoutAValidAdminKey() {
+        grantComplimentary("wrong", 1).expectStatus().isUnauthorized()
+                .expectBody().jsonPath("$.message").isEqualTo("a valid X-Admin-Key header is required");
+        client.post().uri("/api/v1/events/E1/complimentary").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("quantity", 1)).exchange()
+                .expectStatus().isUnauthorized();
+
+        verifyNoInteractions(grantComplimentaryTicketsUseCase);
+    }
+
+    @Test
+    void shouldAnswerConflictWhenThereAreNotEnoughTicketsToGrant() {
+        when(grantComplimentaryTicketsUseCase.execute("E1", 5)).thenReturn(Mono.error(new NotEnoughTicketsException("E1", 5)));
+
+        grantComplimentary("admin-secret", 5).expectStatus().isEqualTo(409);
+    }
+
+    private WebTestClient.ResponseSpec grantComplimentary(String adminKey, int quantity) {
+        return client.post().uri("/api/v1/events/E1/complimentary")
+                .header(ComplimentaryHandler.ADMIN_KEY, adminKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("quantity", quantity))
+                .exchange();
     }
 
     @Test

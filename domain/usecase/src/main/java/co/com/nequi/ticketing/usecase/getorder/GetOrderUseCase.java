@@ -3,6 +3,7 @@ package co.com.nequi.ticketing.usecase.getorder;
 import co.com.nequi.ticketing.model.exception.OrderNotFoundException;
 import co.com.nequi.ticketing.model.order.gateways.OrderRepository;
 import co.com.nequi.ticketing.model.ticket.gateways.TicketRepository;
+import co.com.nequi.ticketing.usecase.shared.OrderDetails;
 import reactor.core.publisher.Mono;
 
 public class GetOrderUseCase {

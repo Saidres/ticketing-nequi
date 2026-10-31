@@ -19,6 +19,25 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# The value is set out of band (console or CLI), so it never appears in code or in the Terraform state
+resource "aws_secretsmanager_secret" "admin_api_key" {
+  name                    = "${local.name}/admin-api-key"
+  recovery_window_in_days = local.prod ? 30 : 0
+}
+
+data "aws_iam_policy_document" "execution_secrets" {
+  statement {
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.admin_api_key.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "execution_secrets" {
+  name   = "${local.name}-execution-secrets"
+  role   = aws_iam_role.execution.id
+  policy = data.aws_iam_policy_document.execution_secrets.json
+}
+
 # Used by the application: least privilege, only its own tables, indexes and queue (no wildcards on resources)
 resource "aws_iam_role" "task" {
   name               = "${local.name}-task"
@@ -26,6 +45,7 @@ resource "aws_iam_role" "task" {
 }
 
 data "aws_iam_policy_document" "task" {
+  # TransactWriteItems is authorized per item through the PutItem permission
   statement {
     sid = "TicketingTables"
     actions = [
@@ -34,7 +54,6 @@ data "aws_iam_policy_document" "task" {
       "dynamodb:Query",
       "dynamodb:Scan",
       "dynamodb:BatchWriteItem",
-      "dynamodb:ConditionCheckItem",
     ]
     resources = flatten([
       for table in [aws_dynamodb_table.events, aws_dynamodb_table.tickets, aws_dynamodb_table.orders] :
@@ -42,7 +61,6 @@ data "aws_iam_policy_document" "task" {
     ])
   }
 
-  # TransactWriteItems is authorized per item through the PutItem permission above
   statement {
     sid       = "OrdersQueue"
     actions   = ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
