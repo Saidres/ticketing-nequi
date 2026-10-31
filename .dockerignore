@@ -1,0 +1,6 @@
+build/
+**/build/
+build-cache/
+.gradle/
+.idea/
+.git/

@@ -3,6 +3,7 @@ package co.com.nequi.ticketing.dynamodb;
 import co.com.nequi.ticketing.model.ticket.Ticket;
 import co.com.nequi.ticketing.model.ticket.TicketStatus;
 import co.com.nequi.ticketing.model.ticket.gateways.TicketRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -36,6 +37,7 @@ public class TicketDynamoRepository implements TicketRepository {
     private final DynamoDbTables tables;
     private final LongSupplier randomStart;
 
+    @Autowired
     public TicketDynamoRepository(DynamoDbAsyncClient client, DynamoDbTables tables) {
         this(client, tables, () -> ThreadLocalRandom.current().nextLong(Long.MAX_VALUE));
     }

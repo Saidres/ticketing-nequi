@@ -1,0 +1,46 @@
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:2.6.1
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    ports:
+      - "8000:8000"
+
+  localstack:
+    image: localstack/localstack:4.9
+    environment:
+      SERVICES: sqs
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      retries: 20
+
+  init-aws:
+    image: amazon/aws-cli:2.31.13
+    depends_on:
+      dynamodb-local:
+        condition: service_started
+      localstack:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+    volumes:
+      - ./deployment/local/init-aws.sh:/init-aws.sh:ro
+    entrypoint: ["/bin/sh", "/init-aws.sh"]
+
+  ticketing:
+    build:
+      context: .
+      dockerfile: deployment/Dockerfile
+    depends_on:
+      init-aws:
+        condition: service_completed_successfully
+    environment:
+      SPRING_PROFILES_ACTIVE: local
+      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+      SQS_ENDPOINT: http://localstack:4566
+      ORDERS_QUEUE_URL: http://localstack:4566/000000000000/ticketing-orders
+    ports:
+      - "8080:8080"

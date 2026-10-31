@@ -25,3 +25,17 @@ entrypoint:
     maxNumberOfMessages: 10
     visibilityTimeoutSeconds: 30
     concurrentPollers: 2
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "health,prometheus"
+  endpoint:
+    health:
+      probes:
+        enabled: true
+cors:
+  allowed-origins: "${CORS_ALLOWED_ORIGINS:http://localhost:4200,http://localhost:8080}"
+ticketing:
+  reservation-ttl: "${RESERVATION_TTL:10m}"
+  expiration-sweep-interval: "${EXPIRATION_SWEEP_INTERVAL:30s}"
