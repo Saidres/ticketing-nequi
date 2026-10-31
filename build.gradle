@@ -24,4 +24,24 @@ subprojects {
     // Remove once it has been updated in Spring Boot
     ext['jackson-2-bom.version'] = "2.22.4"
     ext['jackson-bom.version'] = "3.2.4"
+
+    // Quality gate: `./gradlew check` fails when a module drops below 90% line coverage.
+    // app-service is excluded: it only holds the Spring Boot main class and bean wiring.
+    if (name != 'app-service') {
+        plugins.withId('jacoco') {
+            tasks.named('jacocoTestCoverageVerification') {
+                violationRules {
+                    rule {
+                        limit {
+                            counter = 'LINE'
+                            minimum = 0.90
+                        }
+                    }
+                }
+            }
+            tasks.named('check') {
+                dependsOn 'jacocoTestCoverageVerification'
+            }
+        }
+    }
 }

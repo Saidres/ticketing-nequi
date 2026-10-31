@@ -13,6 +13,7 @@ import software.amazon.awssdk.services.sqs.SqsAsyncClient;
 import software.amazon.awssdk.services.sqs.model.DeleteMessageRequest;
 import software.amazon.awssdk.services.sqs.model.DeleteMessageResponse;
 import software.amazon.awssdk.services.sqs.model.Message;
+import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageResponse;
 import software.amazon.awssdk.services.sqs.model.SqsException;
 
@@ -118,6 +119,25 @@ class SQSListenerTest {
         verify(client, timeout(1000).atLeast(2)).receiveMessage(any(Consumer.class));
         listener.stop();
         assertFalse(listener.isRunning());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldLongPollTheConfiguredQueue() {
+        givenMessages();
+        listener = listenerWith(message -> Mono.empty());
+
+        StepVerifier.create(listener.poll()).verifyComplete();
+
+        ArgumentCaptor<Consumer<ReceiveMessageRequest.Builder>> captor = ArgumentCaptor.forClass(Consumer.class);
+        verify(client).receiveMessage(captor.capture());
+        ReceiveMessageRequest.Builder request = ReceiveMessageRequest.builder();
+        captor.getValue().accept(request);
+        ReceiveMessageRequest built = request.build();
+        assertEquals(PROPERTIES.queueUrl(), built.queueUrl());
+        assertEquals(1, built.waitTimeSeconds());
+        assertEquals(30, built.visibilityTimeout());
+        assertEquals(10, built.maxNumberOfMessages());
     }
 
     @SuppressWarnings("unchecked")

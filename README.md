@@ -1,5 +1,7 @@
 # Ticketing — Plataforma reactiva de procesamiento de compras de entradas
 
+> CI en cada push (GitHub Actions): compila, corre los 232+ tests (incluidos los de integración con DynamoDB Local) y **falla si algún módulo baja de 90% de cobertura**. También construye la imagen Docker y valida el Terraform.
+
 Backend reactivo para vender entradas de eventos con picos de demanda **sin sobreventa**. La API recibe la compra, la **encola de inmediato** y responde con un número de orden. Un **consumidor asíncrono** reserva las entradas con **escrituras condicionales en DynamoDB**. Las reservas duran **máximo 10 minutos** y un proceso periódico libera las que vencen.
 
 **Stack:** Java 25 · Spring Boot 4.1 · Spring WebFlux · DynamoDB (Local) · SQS (LocalStack) · Resilience4j · Docker · Clean Architecture (Scaffold Bancolombia) · JUnit 5 · Mockito · reactor-test · Testcontainers · ArchUnit · PIT.
@@ -341,6 +343,8 @@ Records (16) · `switch` exhaustivo (14) · `sealed` (17) · *pattern matching* 
 | `reactive-web` | 99% |
 | `scheduler` | 95% |
 | `app-service` | 0% (solo `main` y la configuración de beans) |
+
+**Quality gate:** `./gradlew check` aplica `jacocoTestCoverageVerification` con **mínimo 90% de líneas por módulo** (excepto `app-service`) y hace fallar el build si no se cumple. El pipeline [`ci.yml`](.github/workflows/ci.yml) lo ejecuta en cada push y en cada pull request.
 
 | Tipo | Herramienta | Qué cubre |
 |---|---|---|
