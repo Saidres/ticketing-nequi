@@ -1,0 +1,12 @@
+environment         = "dev"
+owner               = "ticketing-team"
+cost_center         = "tickets-dev"
+single_nat_gateway  = true
+container_image     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/ticketing-dev:1.0.0"
+task_cpu            = 512
+task_memory         = 1024
+min_tasks           = 1
+max_tasks           = 2
+acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/dev-placeholder"
+alarm_email         = "ticketing-dev@example.com"
+log_retention_days  = 7

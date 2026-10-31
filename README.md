@@ -16,6 +16,7 @@ Backend reactivo para vender entradas de eventos con picos de demanda **sin sobr
 7. [Seguridad](#7-seguridad)
 8. [Pruebas](#8-pruebas)
 9. [Limitaciones y qué cambiaría en producción](#9-limitaciones-y-qué-cambiaría-en-producción)
+10. [Infraestructura como código en AWS (Terraform)](#10-infraestructura-como-código-en-aws-terraform)
 
 ---
 
@@ -365,3 +366,52 @@ Records (16) · `switch` exhaustivo (14) · `sealed` (17) · *pattern matching* 
 | Rate limiter en memoria por instancia | Rate limiting distribuido (API Gateway usage plans / WAF o Redis) |
 | Métricas en `/actuator/prometheus` | Dashboards y alarmas (CloudWatch / Grafana), trazas distribuidas (OpenTelemetry) y alarma sobre mensajes en la DLQ |
 | La cortesía (`COMPLIMENTARY`) existe en el dominio, pero no tiene endpoint | Un endpoint administrativo protegido para asignar cortesías |
+
+---
+
+## 10. Infraestructura como código en AWS (Terraform)
+
+En [`deployment/terraform/`](deployment/terraform) está el despliegue en AWS. Está validado con `terraform validate` (no se aplicó a una cuenta real).
+
+```mermaid
+flowchart LR
+    U((Internet)) -->|HTTPS 443| ALB["ALB<br/>subredes públicas"]
+    subgraph VPC["VPC 10.20.0.0/16 · 2 zonas de disponibilidad"]
+        ALB -->|8080, solo desde el ALB| ECS["ECS Fargate<br/>subredes privadas · sin IP pública<br/>autoescalado por CPU"]
+        ECS --> GW["VPC Endpoint Gateway"] --> DDB[("DynamoDB on-demand<br/>PITR · cifrado")]
+        ECS --> IE["VPC Endpoint Interface"] --> SQS[["SQS + DLQ<br/>cifrado"]]
+        ECS -.->|imágenes y otros servicios| NAT["NAT Gateway"]
+    end
+    ECS --> CW["CloudWatch<br/>logs · Container Insights · alarmas → SNS"]
+```
+
+```bash
+cd deployment/terraform
+terraform init -backend-config=environments/dev.backend.hcl
+terraform plan  -var-file=environments/dev.tfvars
+terraform apply -var-file=environments/dev.tfvars
+```
+
+| Archivo | Contenido |
+|---|---|
+| `network.tf` | VPC, subredes públicas y privadas en 2 AZ, NAT, VPC endpoints y security groups |
+| `data.tf` | Las 3 tablas DynamoDB con sus índices, y la cola SQS + DLQ |
+| `iam.tf` | Rol de ejecución y rol de la app con mínimo privilegio |
+| `compute.tf` | ECR, ECS Fargate, ALB con HTTPS (TLS 1.3) y autoescalado |
+| `observability.tf` | Alarmas y notificación por SNS |
+| `environments/*.tfvars` / `*.backend.hcl` | Diferencias entre `dev` y `prod` y su estado remoto separado |
+
+### Decisiones
+| Tema | Decisión | Por qué |
+|---|---|---|
+| **Networking** | La app vive en **subredes privadas**; solo el ALB es público. **VPC Endpoints** para DynamoDB (gateway, gratis) y SQS | El tráfico a los servicios de AWS no sale a internet, y se ahorra el costo de datos por NAT |
+| **Seguridad** | Security groups encadenados (internet → ALB:443 → app:8080). Rol IAM **de mínimo privilegio**: solo las acciones que usa la app, sobre sus 3 tablas, sus índices y su cola. Cifrado en reposo en DynamoDB y SQS. TLS 1.3 en el ALB. ECR con imágenes **inmutables** y escaneo de vulnerabilidades. **Sin secretos**: la app usa el rol de la tarea | Defensa en profundidad; un contenedor comprometido no puede tocar otros recursos |
+| **Escalabilidad** | DynamoDB **on-demand**; ECS con autoescalado por CPU (1-2 tareas en dev, 2-10 en prod) en 2 AZ | Las ventas de entradas son picos impredecibles: on-demand los absorbe sin aprovisionar capacidad |
+| **Resiliencia** | 2 AZ, *deployment circuit breaker* con rollback automático, PITR (recuperación a cualquier punto de los últimos 35 días) y *deletion protection* en prod | Un despliegue roto se revierte solo; no se pierden datos |
+| **Aislamiento de entornos** | El mismo código con `dev.tfvars` / `prod.tfvars` y **un estado remoto por entorno** (S3 con bloqueo). Nombres con sufijo de entorno | `dev` no puede romper `prod`; los cambios se prueban primero en dev |
+| **Costos** | Pago por uso en DynamoDB y Fargate. **1 NAT en dev, 1 por AZ en prod**. Logs con 7 días de retención en dev y 90 en prod | El NAT y los logs son los costos ocultos típicos |
+| **Observabilidad** | Logs centralizados, Container Insights y alarmas: **mensajes en la DLQ**, cola atrasada (> 60 s), errores 5xx y throttling de DynamoDB, notificadas por SNS | Se detectan las órdenes que nadie pudo procesar y cuando los consumidores no dan abasto |
+| **Gobernanza** | `default_tags` en todos los recursos: Project, Environment, Owner, CostCenter, ManagedBy | Reporte de costos por equipo y entorno, y auditoría de quién es dueño de qué |
+
+**Siguientes pasos en una cuenta real:** pipeline de CI/CD (build → escaneo → push a ECR → `terraform plan` revisado en el PR), WAF delante del ALB (rate limiting distribuido), autoescalado también por la profundidad de la cola SQS, y alarmas de presupuesto (AWS Budgets).
+
